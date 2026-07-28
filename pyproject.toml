@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "forgeserve"
 version = "0.1.0"
-description = "LLM Infernce Engine"
+description = "LLM Inference Engine"
 readme = "README.md"
 authors = [
   {name = "Danish Shaikh", email = "shaikhdanish.sd06@gmail.com"}
@@ -23,13 +23,14 @@ dependencies = [
   "typer",
   "rich",
 ]
-requires-python = ">= 3.12"
+requires-python = ">= 3.11"
 
 [dependency-groups]
 dev = [
     { include-group = "lint" },
     { include-group = "test" },
     { include-group = "typecheck" },
+    
 ]
 lint = [
     "ruff",
@@ -37,9 +38,10 @@ lint = [
 test = [
     "coverage",
     "pytest",
+    "pytest-cov",
 ]
 typecheck = [
-    "ty",
+    "mypy",
 ]
 docs = [
     "zensical",
@@ -55,10 +57,10 @@ homepage = "https://github.com/danishshaikh06/forgeserve"
 [project.scripts]
 forgeserve = "forgeserve.cli:app"
 
-[tool.ty]
-# All rules are enabled as "error" by default; no need to specify unless overriding.
-# Example override: relax a rule for the entire project (uncomment if needed).
-# rules.TY015 = "warn"  # For invalid-argument-type, warn instead of error.
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 120
@@ -73,10 +75,14 @@ select = [
     "UP",  # pyupgrade
 ]
 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
 [tool.coverage.run]
 branch = true
 parallel = true
-source = ["src/", "tests/"]
+source = ["forgeserve"]
 
 [tool.coverage.report]
 show_missing = true
