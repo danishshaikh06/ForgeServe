@@ -35,3 +35,8 @@ class ModelLoader:
         model.eval()  # Set the model to evaluation mode
 
         return model, tokenizer
+
+    @property
+    def device(self):
+
+        return self.model.device

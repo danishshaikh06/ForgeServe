@@ -64,9 +64,12 @@ LLM Inference Pipeline (Decoder-Only Transformer)
       - Repeat until EOS or max_new_tokens is reached.
 """
 
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from forgeserve.model.loader import ModelLoader
 import torch
 from forgeserve.logger import get_logger
+from forgeserve.model.exception import ModelException
+from transformers import BatchEncoding
 
 logger = get_logger(__name__)
 
@@ -78,12 +81,21 @@ class Runtime:
             self,
             model_name: str,
             ) -> None:
+        
         self.model_name = model_name
-        self.loader = ModelLoader(model_name=self.model_name)
-        logger.info(f"Loading model and tokenizer for {self.model_name}...")
-        self.model, self.tokenizer = self.loader.load()
+        try:
+            logger.info(f"Initializing Runtime with model: {self.model_name}")
+            self.loader = ModelLoader(model_name=self.model_name)
 
-    def tokenized(self, text: str) -> dict:
+        except Exception as e:
+            logger.exception(f"Failed to initialize Runtime for {self.model_name}: {e}")
+            raise ModelException(f"Failed to initialize Runtime for {self.model_name}: {e}")
+        
+        else:
+            logger.info(f"ModelLoader initialized successfully for {self.model_name}.")
+            self.model, self.tokenizer = self.loader.load()
+
+    def tokenize(self, text: str) -> BatchEncoding:
         """
         Tokenizes the input text using the loaded tokenizer.
         Args:
@@ -91,41 +103,37 @@ class Runtime:
         Returns:
             tokenized_output: The tokenized representation of the input text.
         """
-        logger.info(f"Tokenizing input text: {text}")
+        logger.debug("Tokenizing input text")
         tokenized_output = self.tokenizer(text, return_tensors="pt").to(self.loader.device)
-        logger.info(f"Tokenized output shape: {tokenized_output['input_ids'].shape}")
+        logger.debug("Tokenization completed successfully")
         return tokenized_output
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict:
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor=None, **kwargs) -> CausalLMOutputWithPast:
         """
         Performs a forward pass through the model.
         Args:
-            input_ids: The tokenized input IDs.
-            attention_mask: The attention mask for the input.
+            input_ids (torch.Tensor): The tokenized input IDs.
+            attention_mask (torch.Tensor): The attention mask for the input.
+            **kwargs: Keyword arguments for the model's forward method.
         Returns:
             output: The model's output.
         """
-        with torch.no_grad():
-            logger.info("Performing forward pass through the model...")
-            output = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        logger.info("Forward pass completed.")
+        with torch.inference_mode():
+            logger.debug("Performing forward pass through the model...")
+            output = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+
+        logger.debug("Forward pass completed.")
         return output # the output is a tuple containing the model's output and other information, depending on the model architecture.
 
-if __name__ == "__main__":
-    runtime = Runtime(model_name="Qwen/Qwen2.5-0.5B-Instruct")
+    def decode(self, token_ids: torch.Tensor) -> str:
+        """
+        Decodes the token IDs back to text using the loaded tokenizer.
+        Args:
+            token_ids (torch.Tensor): The token IDs to decode.
+        Returns:
+            decoded_text (str): The decoded text.
+        """
+        decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+        logger.debug("Decoded text successfully")
+        return decoded_text
 
-    sample_text = "Hello, how are you?"
-
-    tokenized_output = runtime.tokenized(sample_text)
-    output = runtime.forward(**tokenized_output)
-    print(tokenized_output)
-    print(output)
-     
-
-    logits = output.logits
-
-    next_token = logits[:, -1, :].argmax(dim=-1)
-    print(f"Next token ID: {next_token.item()}")
-
-    token_str = runtime.tokenizer.decode(next_token)
-    print(f"Next token string: {token_str}")
