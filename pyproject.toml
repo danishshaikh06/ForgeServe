@@ -22,8 +22,15 @@ license = {text = "MIT"}
 dependencies = [
   "typer",
   "rich",
+  "torch==2.8.0",
+  "torchvision==0.23.0",
+  "torchaudio==2.8.0",
+  "transformers==4.56.0",
+  "accelerate==1.10.1",
+  "sentencepiece==0.2.1",
+  "safetensors==0.6.2",
 ]
-requires-python = ">= 3.11"
+requires-python = ">= 3.11,<3.12"
 
 [dependency-groups]
 dev = [
@@ -58,7 +65,7 @@ homepage = "https://github.com/danishshaikh06/forgeserve"
 forgeserve = "forgeserve.cli:app"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 strict = true
 ignore_missing_imports = true
 
@@ -105,3 +112,12 @@ testpaths = ["tests"]
 [tool.uv]
 package = true
 default-groups = ["dev"]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+torchaudio = { index = "pytorch" }
