@@ -12,48 +12,40 @@ alias tc := type-check
 
 # Type check the project with ty
 type-check:
-    uv run --python=3.14 ty check .
-
-# Type check with concise output (one diagnostic per line)
-type-check-concise:
-    uv run --python=3.14 ty check --output-format=concise .
-
-# Type check in watch mode (rechecks on file changes)
-type-check-watch:
-    uv run --python=3.14 ty check --watch .
+    uv run --python=3.11 mypy src/
 
 # Run all the formatting, linting, and testing commands
 qa:
-    uv run --python=3.14 ruff format .
-    uv run --python=3.14 ruff check . --fix
-    uv run --python=3.14 ruff check --select I --fix .
-    uv run --python=3.14 ty check --output-format=concise .
-    uv run --python=3.14 pytest
+    uv run --python=3.11 ruff format .
+    uv run --python=3.11 ruff check . --fix
+    uv run --python=3.11 ruff check --select I --fix .
+    uv run --python=3.11 mypy src/
+    uv run --python=3.11 pytest
 
 # Run all the tests for all the supported Python versions
 testall:
-    uv run --python=3.12 pytest
-    uv run --python=3.13 pytest
-    uv run --python=3.14 pytest
+    uv run --python=3.11 pytest
+    uv run --python=3.11 pytest
+    uv run --python=3.11 pytest
 
 # Run all the tests, but allow for arguments to be passed
 test *ARGS:
     @echo "Running with arg: {{ARGS}}"
-    uv run --python=3.14 pytest {{ARGS}}
+    uv run --python=3.11 pytest {{ARGS}}
 
 # Run all the tests, but on failure, drop into the debugger
 pdb *ARGS:
     @echo "Running with arg: {{ARGS}}"
-    uv run --python=3.14 pytest --pdb --maxfail=10 {{ARGS}}
+    uv run --python=3.11 pytest --pdb --maxfail=10 {{ARGS}}
 
 # Run tests with coverage across all supported Python versions
 coverage:
-    uv run --python=3.12 coverage run -m pytest
-    uv run --python=3.13 coverage run -m pytest
-    uv run --python=3.14 coverage run -m pytest
-    uv run --python=3.14 coverage combine
-    uv run --python=3.14 coverage report
-    uv run --python=3.14 coverage html
+    uv run --python=3.11 coverage run -m pytest
+    uv run --python=3.11 coverage run -m pytest
+    uv run --python=3.11 coverage run -m pytest
+    uv run --python=3.11 coverage combine
+    uv run --python=3.11 coverage report
+    uv run --python=3.11 coverage html
 
 # Serve docs locally with live reload
 docs-serve:

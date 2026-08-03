@@ -1,4 +1,4 @@
-""""
+""" "
 LLM Inference Pipeline (Decoder-Only Transformer)
 
 1. Input text
@@ -64,24 +64,29 @@ LLM Inference Pipeline (Decoder-Only Transformer)
       - Repeat until EOS or max_new_tokens is reached.
 """
 
-from transformers.modeling_outputs import CausalLMOutputWithPast
-from forgeserve.model.loader import ModelLoader
+from typing import Any, cast
+
 import torch
+from transformers import BatchEncoding
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
 from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
-from transformers import BatchEncoding
+from forgeserve.model.loader import ModelLoader
 
 logger = get_logger(__name__)
+
 
 class Runtime:
     """
     Runtime class that initializes the model and tokenizer using ModelLoader.
     """
+
     def __init__(
-            self,
-            model_name: str,
-            ) -> None:
-        
+        self,
+        model_name: str,
+    ) -> None:
+
         self.model_name = model_name
         try:
             logger.info(f"Initializing Runtime with model: {self.model_name}")
@@ -89,13 +94,13 @@ class Runtime:
 
         except Exception as e:
             logger.exception(f"Failed to initialize Runtime for {self.model_name}: {e}")
-            raise ModelException(f"Failed to initialize Runtime for {self.model_name}: {e}")
-        
+            raise ModelException(f"Failed to initialize Runtime for {self.model_name}: {e}") from e
+
         else:
             logger.info(f"ModelLoader initialized successfully for {self.model_name}.")
             self.model, self.tokenizer = self.loader.load()
 
-    def tokenize(self, text: str, system_prompt: str = None) -> BatchEncoding:
+    def tokenize(self, text: str, system_prompt: str | None = None) -> BatchEncoding:
         """
         Tokenizes the input text using the loaded tokenizer.
         Args:
@@ -105,23 +110,25 @@ class Runtime:
         """
         messages = []
         if system_prompt:
-            messages.append(
-                {"role": "system", "content": system_prompt}
-            )
-        messages.append(
-            {"role": "user", "content": text}
-            )
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": text})
+
         logger.debug("Tokenizing input text")
-        formatted_text = self.tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
+        formatted_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        tokenized_output = cast(
+            BatchEncoding,
+            self.tokenizer(
+                formatted_text,
+                return_tensors="pt",
+            ).to(self.loader.device),
         )
-        tokenized_output = self.tokenizer(formatted_text, return_tensors="pt").to(self.loader.device)
         logger.debug("Tokenization completed successfully")
+
         return tokenized_output
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor=None, **kwargs) -> CausalLMOutputWithPast:
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None, **kwargs: Any
+    ) -> CausalLMOutputWithPast:
         """
         Performs a forward pass through the model.
         Args:
@@ -133,10 +140,11 @@ class Runtime:
         """
         with torch.inference_mode():
             logger.debug("Performing forward pass through the model...")
-            output = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
-
+            output = cast(
+                CausalLMOutputWithPast, self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+            )
         logger.debug("Forward pass completed.")
-        return output 
+        return output
 
     def decode(self, token_ids: torch.Tensor) -> str:
         """
@@ -149,4 +157,3 @@ class Runtime:
         decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
         logger.debug("Decoded text successfully")
         return decoded_text
-

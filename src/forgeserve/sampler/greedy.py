@@ -1,4 +1,5 @@
 import torch
+
 from forgeserve.logger import get_logger
 from forgeserve.sampler.base import Sampler
 from forgeserve.sampler.exception import InvalidLogitsShapeError
@@ -25,8 +26,7 @@ class GreedySampler(Sampler):
 
         if logits.ndim != 2:
             raise InvalidLogitsShapeError(
-                f"Expected logits with shape (batch_size, vocab_size). "
-                f"Received {tuple(logits.shape)}."
+                f"Expected logits with shape (batch_size, vocab_size). Received {tuple(logits.shape)}."
             )
 
         logger.debug(
