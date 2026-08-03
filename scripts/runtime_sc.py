@@ -15,4 +15,4 @@ print(input_ids.shape)
 print(attention_mask)
 print(attention_mask.shape)
 
-print(output)
+print(output.logits)
