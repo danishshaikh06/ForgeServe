@@ -55,3 +55,6 @@ site/
 
 # Virtual environments
 venv/
+
+#logs 
+logs/

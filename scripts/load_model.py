@@ -1,7 +1,8 @@
 from forgeserve.model.loader import ModelLoader
 
 loader = ModelLoader(
-    model_name="Qwen/Qwen2.5-0.5B-Instruct"
+    model_name="Qwen/Qwen2.5-0.5B-Instruct",
+    device='cuda'
     )
 
 model , tokenizer = loader.load()

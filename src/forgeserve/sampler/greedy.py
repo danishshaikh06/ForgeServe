@@ -1,7 +1,5 @@
 import torch
-
 from forgeserve.logger import get_logger
-
 from forgeserve.sampler.base import Sampler
 from forgeserve.sampler.exception import InvalidLogitsShapeError
 

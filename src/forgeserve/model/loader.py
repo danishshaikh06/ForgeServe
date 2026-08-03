@@ -11,8 +11,12 @@ class ModelLoader:
                  dtype: torch.dtype = torch.bfloat16) -> None:
         
         self.model_name = model_name
-        self.device = device
+        self._device = device
         self.dtype = dtype
+
+    @property
+    def device(self):
+        return self._device
 
     def load(self):
         """
@@ -36,7 +40,3 @@ class ModelLoader:
 
         return model, tokenizer
 
-    @property
-    def device(self):
-
-        return self.model.device
