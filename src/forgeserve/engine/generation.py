@@ -6,7 +6,7 @@ from forgeserve.sampler.base import Sampler
 from forgeserve.logger import get_logger
 from forgeserve.engine.exception import GenerationException
 from forgeserve.engine.response import GenerationResponse
-from forgeserve.engine.config import max_new_token
+#from forgeserve.engine.config import max_new_token
 
 logger = get_logger(__name__)
 
@@ -26,7 +26,7 @@ class GenerationEngine:
     def generate(
             self,
             prompt: str,
-            max_new_token: int = max_new_token, 
+            max_new_token: int = 100, 
     ) -> GenerationResponse:
 
         logger.info("Starting text generation")
@@ -34,7 +34,7 @@ class GenerationEngine:
         start = time.perf_counter()
 
         try:
-            encoded = self.runtime.tokenize(prompt)
+            encoded = self.runtime.tokenize(prompt,"You are an ai inference model created by danish ")
             input_ids = encoded['input_ids']
             attention_mask = encoded['attention_mask']
 
@@ -125,5 +125,5 @@ class GenerationEngine:
 
         eos = self.runtime.tokenizer.eos_token_id
 
-        return bool((token == eos)).all()
+        return bool((token == eos).all())
 

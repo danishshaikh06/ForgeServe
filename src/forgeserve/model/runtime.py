@@ -95,7 +95,7 @@ class Runtime:
             logger.info(f"ModelLoader initialized successfully for {self.model_name}.")
             self.model, self.tokenizer = self.loader.load()
 
-    def tokenize(self, text: str) -> BatchEncoding:
+    def tokenize(self, text: str, system_prompt: str = None) -> BatchEncoding:
         """
         Tokenizes the input text using the loaded tokenizer.
         Args:
@@ -103,8 +103,21 @@ class Runtime:
         Returns:
             tokenized_output: The tokenized representation of the input text.
         """
+        messages = []
+        if system_prompt:
+            messages.append(
+                {"role": "system", "content": system_prompt}
+            )
+        messages.append(
+            {"role": "user", "content": text}
+            )
         logger.debug("Tokenizing input text")
-        tokenized_output = self.tokenizer(text, return_tensors="pt").to(self.loader.device)
+        formatted_text = self.tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+        )
+        tokenized_output = self.tokenizer(formatted_text, return_tensors="pt").to(self.loader.device)
         logger.debug("Tokenization completed successfully")
         return tokenized_output
 
@@ -123,7 +136,7 @@ class Runtime:
             output = self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
 
         logger.debug("Forward pass completed.")
-        return output # the output is a tuple containing the model's output and other information, depending on the model architecture.
+        return output 
 
     def decode(self, token_ids: torch.Tensor) -> str:
         """
