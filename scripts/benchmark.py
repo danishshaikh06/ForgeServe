@@ -62,7 +62,7 @@ def main() -> None:
         "generated_text": response.text,
     }
 
-    artifact_path = Path("artifacts/phase1")
+    artifact_path = Path("benchmarks/phase1")
 
     artifact_path.mkdir(
         parents=True,
