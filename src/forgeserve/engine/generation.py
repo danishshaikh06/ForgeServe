@@ -9,6 +9,7 @@ from forgeserve.engine.response import GenerationResponse
 from forgeserve.logger import get_logger
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.base import Sampler
+from forgeserve.engine.config import GenerationConfig
 
 logger = get_logger(__name__)
 
@@ -30,7 +31,7 @@ class GenerationEngine:
     def generate(
         self,
         prompt: str,
-        max_new_token: int,
+        config: GenerationConfig,
     ) -> GenerationResponse:
 
         logger.info("Starting text generation")
@@ -44,7 +45,7 @@ class GenerationEngine:
 
             generated = 0
 
-            for _ in range(max_new_token):
+            for _ in range(config.max_new_tokens):
                 output = self.runtime.forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,

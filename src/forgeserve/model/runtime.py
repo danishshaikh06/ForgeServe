@@ -69,6 +69,7 @@ from typing import Any, cast
 import torch
 from transformers import BatchEncoding
 from transformers.modeling_outputs import CausalLMOutputWithPast
+import time 
 
 from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
@@ -139,11 +140,17 @@ class Runtime:
             output: The model's output.
         """
         with torch.inference_mode():
+            start = time.perf_counter()
+
             logger.debug("Performing forward pass through the model...")
             output = cast(
                 CausalLMOutputWithPast, self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
             )
-        logger.debug("Forward pass completed.")
+            end = time.perf_counter()
+
+            time_taken_for = end - start
+
+        logger.debug(f"Forward pass completed. Time taken for forward pass{time_taken_for}")
         return output
 
     def decode(self, token_ids: torch.Tensor) -> str:
@@ -154,6 +161,11 @@ class Runtime:
         Returns:
             decoded_text (str): The decoded text.
         """
+        start = time.perf_counter()
         decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
-        logger.debug("Decoded text successfully")
+        end = time.perf_counter()
+
+        time_taken_dec = end - start 
+
+        logger.debug(f"Decoded text successfully.Time taken to decode{time_taken_dec}")
         return decoded_text

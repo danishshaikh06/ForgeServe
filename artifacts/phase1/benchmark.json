@@ -1,0 +1,11 @@
+{
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "prompt": "Hello! how are you?",
+    "prompt_tokens": 6,
+    "generated_tokens": 27,
+    "max_new_tokens": 100,
+    "latency_seconds": 1.432,
+    "tokens_per_second": 18.86,
+    "finish_reason": "eos",
+    "generated_text": "system\nYou are an ai inference model created by danish \nuser\nHello! how are you?\nassistant\nHello! I'm just a machine learning model, so I don't have feelings or emotions. How can I assist you today?"
+}
