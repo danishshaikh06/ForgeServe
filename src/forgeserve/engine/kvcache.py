@@ -4,17 +4,17 @@ import time
 
 import torch
 
+from forgeserve.engine.config import GenerationConfig
 from forgeserve.engine.exception import GenerationException
 from forgeserve.engine.response import GenerationResponse
 from forgeserve.logger import get_logger
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.base import Sampler
-from forgeserve.engine.config import GenerationConfig
 
 logger = get_logger(__name__)
 
 
-class GenerationEngine:
+class KVCacheGenerationEngine:
     """
     Orchestrates autoregressive text generation.
     """
@@ -50,14 +50,14 @@ class GenerationEngine:
             input_ids = encoded["input_ids"]
             attention_mask = encoded["attention_mask"]
 
-            #prefill 
+            #prefill
             #process the full prompt once, get cache + first logits to pass to decode step
             logits, cache = self.runtime.prefill(input_ids, attention_mask)
 
             generated = 0
             is_eos = False
 
-            #decode loop 
+            #decode loop
             for _ in range(config.max_new_tokens):
 
                 next_token = self.sampler.sample(logits) # (batch,)
@@ -110,7 +110,7 @@ class GenerationEngine:
         Append the generated token to the current sequence.
         """
 
-        next_token = next_token.unsqueeze(-1)  
+        next_token = next_token.unsqueeze(-1)
 
         input_ids = torch.cat(
             (input_ids, next_token),

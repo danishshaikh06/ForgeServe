@@ -64,17 +64,17 @@ LLM Inference Pipeline (Decoder-Only Transformer)
       - Repeat until EOS or max_new_tokens is reached.
 """
 
+import time
 from typing import Any, cast
 
 import torch
 from transformers import BatchEncoding
 from transformers.modeling_outputs import CausalLMOutputWithPast
-import time 
-from forgeserve.engine.config import GenerationConfig
+
+from forgeserve.kv_cache.cache import KVCache
 from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
 from forgeserve.model.loader import ModelLoader
-from forgeserve.kv_cache.cache import KVCache
 
 logger = get_logger(__name__)
 
@@ -211,7 +211,7 @@ class Runtime:
         decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
         end = time.perf_counter()
 
-        time_taken_dec = end - start 
+        time_taken_dec = end - start
 
         logger.debug(f"Decoded text successfully.Time taken to decode{time_taken_dec}")
         return decoded_text
@@ -223,21 +223,18 @@ class Runtime:
         cache: KVCache
         ) -> tuple[torch.Tensor, KVCache]:
         """
-         Decode phase: process one new token using the KV cache.
-            
+        Decode phase: process one new token using the KV cache.
         Key insight: input_ids contains ONLY the new token (shape: batch, 1).
         The model attends to previous tokens via past_key_values, not input_ids.
         The attention_mask must cover the FULL sequence (prompt + all decoded tokens).
-            
         Args:
             token_id: The last generated token. Shape: (batch, 1)
             attention_mask: Full sequence mask. Shape: (batch, cache.seq_len + 1)
             cache: Current KV cache
-            
         Returns:
             logits: Shape (batch, vocab_size)
             updated_cache: KVCache with new token's K/V appended
-        """   
+        """
         logger.debug(
             "Decode step at position %d",
             cache.seq_len,
@@ -245,7 +242,7 @@ class Runtime:
 
         output = self.forward(
             input_ids = token_id, # only one new token
-            attention_mask = attention_mask, # full sequence mask 
+            attention_mask = attention_mask, # full sequence mask
             past_key_values = cache.past_key_values,
             use_cache = True,
         )
@@ -259,4 +256,4 @@ class Runtime:
         return logits, updated_cache
 
 
-    
+

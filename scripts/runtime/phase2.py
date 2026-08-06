@@ -15,13 +15,19 @@ print(attention_mask)
 print(attention_mask.shape)
 
 print('-' * 40)
-print(output) # Its  tuple to see the shape use it like indexing 
+print(output) # Its  tuple to see the shape use it like indexing
 print('-' * 40)
 print(type(output))
 
 print('-' * 40)
-print(output[1]) # Return KV Cache 
+print(output[1]) # Return KV Cache
 
 print('-' * 40)
-print(output[0]) # Returns Logits 
+print(output[0]) # Returns Logits
 
+
+print('-' * 40)
+#print(output[1].shape) 
+
+print('-' * 40)
+print(output[0].shape)

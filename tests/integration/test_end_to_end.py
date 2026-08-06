@@ -1,6 +1,6 @@
 import pytest
 
-from forgeserve.engine.generation import GenerationEngine
+from forgeserve.engine.kvcache import GenerationEngine
 from forgeserve.engine.response import GenerationResponse
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.greedy import GreedySampler

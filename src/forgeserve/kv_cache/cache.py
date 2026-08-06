@@ -1,12 +1,17 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from forgeserve.kv_cache.exception import KVCacheNotInitializedError
+
 import torch
+
+from forgeserve.kv_cache.exception import KVCacheNotInitializedError
+
+from transformers.cache_utils import Cache
 
 # HuggingFace past_key_values type alias
 # tuple of (K, V) per layer -> it refers to transformer layers
 # each K or V: (batch_size, num_heads, seq_len, head_dim)
-PastKeyValues = tuple[tuple[torch.Tensor, torch.Tensor], ...]
+PastKeyValues = Cache
 
 @dataclass
 class KVCache:
@@ -76,5 +81,5 @@ class KVCache:
                     f'Layer {layer_idx}: cache seq_len {k.shape[2]}'
                     f'!= tracked seq_len {self.seq_len}'
                 )
-    
-        
+
+

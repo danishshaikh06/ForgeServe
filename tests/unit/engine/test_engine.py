@@ -1,32 +1,38 @@
 import pytest
 
-from forgeserve.engine.generation import GenerationEngine
+from forgeserve.engine.kvcache import KVCacheGenerationEngine
 from forgeserve.engine.response import GenerationResponse
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.greedy import GreedySampler
+from forgeserve.engine.config import GenerationConfig
 
+
+config = GenerationConfig(
+    max_new_tokens = 10 
+)
 
 @pytest.fixture(scope="session")
-def engine() -> GenerationEngine:
+def engine() -> KVCacheGenerationEngine:
     runtime = Runtime(
         "Qwen/Qwen2.5-0.5B-Instruct"
     )
 
     sampler = GreedySampler()
 
-    return GenerationEngine(
+    return KVCacheGenerationEngine(
         runtime,
         sampler,
     )
 
 
 def test_generate_returns_response(
-    engine: GenerationEngine,
+    engine: KVCacheGenerationEngine,
 ) -> None:
 
+    
     response = engine.generate(
         "Hello",
-        max_new_token=10,
+         config,
     )
 
     assert isinstance(
@@ -36,12 +42,12 @@ def test_generate_returns_response(
 
 
 def test_generated_text_is_string(
-    engine: GenerationEngine,
+    engine: KVCacheGenerationEngine,
 ) -> None:
 
     response = engine.generate(
         "Hello",
-        max_new_token=10,
+        config
     )
 
     assert isinstance(
@@ -53,26 +59,26 @@ def test_generated_text_is_string(
 
 
 def test_generated_token_count(
-    engine: GenerationEngine,
+    engine: KVCacheGenerationEngine,
 ) -> None:
 
-    max_tokens = 5
+   
 
     response = engine.generate(
         "Hello",
-        max_new_token=max_tokens,
+        config,
     )
 
-    assert response.generated_tokens <= max_tokens
+    assert response.generated_tokens <= config.max_new_tokens
 
 
 def test_generation_finish_reason(
-    engine: GenerationEngine,
+    engine: KVCacheGenerationEngine,
 ) -> None:
 
     response = engine.generate(
         "Hello",
-        max_new_token=5,
+        config,
     )
 
     assert response.finish_reason in {

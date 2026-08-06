@@ -1,5 +1,5 @@
 from forgeserve.engine.config import GenerationConfig
-from forgeserve.engine.generation import GenerationEngine
+from forgeserve.engine.naive import NaiveGenerationEngine
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.greedy import GreedySampler
 
@@ -8,7 +8,7 @@ prompt = "Hello! how are you?"
 
 greddy = GreedySampler()
 
-engine = GenerationEngine(runtime, greddy)
+engine = NaiveGenerationEngine(runtime, greddy)
 
 config = GenerationConfig(
     max_new_tokens=100,

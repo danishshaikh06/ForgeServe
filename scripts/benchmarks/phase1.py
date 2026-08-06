@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 
 from forgeserve.engine.config import GenerationConfig
-from forgeserve.engine.generation import GenerationEngine
+from forgeserve.engine.naive import NaiveGenerationEngine
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.greedy import GreedySampler
 
@@ -16,7 +16,7 @@ def main() -> None:
 
     sampler = GreedySampler()
 
-    engine = GenerationEngine(
+    engine = NaiveGenerationEngine(
         runtime,
         sampler,
     )
