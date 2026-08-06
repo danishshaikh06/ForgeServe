@@ -18,7 +18,6 @@ class GenerationEngine:
     """
     Orchestrates autoregressive text generation.
     """
-
     def __init__(
         self,
         runtime: Runtime,
@@ -34,39 +33,55 @@ class GenerationEngine:
         config: GenerationConfig,
     ) -> GenerationResponse:
 
-        logger.info("Starting text generation")
-
+        logger.info("Starting text generation using KV Cache")
         start = time.perf_counter()
 
+        # Guard: nothing to generate
+        if config.max_new_tokens <= 0:
+            logger.warning("max_new_tokens is 0. Returning empty response.")
+            return GenerationResponse(
+                text="",
+                generated_tokens=0,
+                finish_reason="length",
+            )
+
         try:
-            encoded = self.runtime.tokenize(prompt, "You are an ai inference model created by danish ")
+            encoded = self.runtime.tokenize(prompt, config.system_prompt)
             input_ids = encoded["input_ids"]
             attention_mask = encoded["attention_mask"]
 
+            #prefill 
+            #process the full prompt once, get cache + first logits to pass to decode step
+            logits, cache = self.runtime.prefill(input_ids, attention_mask)
+
             generated = 0
+            is_eos = False
 
+            #decode loop 
             for _ in range(config.max_new_tokens):
-                output = self.runtime.forward(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                )
 
-                assert output.logits is not None
-                logits = output.logits[:, -1, :]
+                next_token = self.sampler.sample(logits) # (batch,)
+                generated +=1
 
-                next_token = self.sampler.sample(logits)
+                is_eos = self._should_stop(next_token)
+                if is_eos:
+                    logger.debug("EOS Token Encountered")
+                    break
 
+                # Append new token to input_ids and mask
+                # input_ids used only for final decode — not re-fed to model
                 input_ids, attention_mask = self._append_token(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     next_token=next_token,
                 )
 
-                generated += 1
-
-                if self._should_stop(next_token):
-                    logger.debug("EOS Token Encountered")
-                    break
+                # Decode step: pass only new token + full mask + cache
+                logits, cache = self.runtime.decode_step(
+                    token_id= next_token.unsqueeze(-1), # (batch,1)
+                    attention_mask = attention_mask,
+                    cache = cache,
+                )
 
             text = self.runtime.decode(input_ids[0])
             end = time.perf_counter()
@@ -78,7 +93,7 @@ class GenerationEngine:
             return GenerationResponse(
                 text=text,
                 generated_tokens=generated,
-                finish_reason="eos" if self._should_stop(next_token) else "length",
+                finish_reason="eos" if is_eos else "length",
             )
 
         except Exception as exc:
@@ -95,7 +110,7 @@ class GenerationEngine:
         Append the generated token to the current sequence.
         """
 
-        next_token = next_token.unsqueeze(-1)  # shape was (1,dim) -> (1,1,dim)
+        next_token = next_token.unsqueeze(-1)  
 
         input_ids = torch.cat(
             (input_ids, next_token),
@@ -123,7 +138,6 @@ class GenerationEngine:
         """
         Stop generation when the EOS token is produced.
         """
-
         eos = self.runtime.tokenizer.eos_token_id
 
         return bool((token == eos).all())

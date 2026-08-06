@@ -70,10 +70,11 @@ import torch
 from transformers import BatchEncoding
 from transformers.modeling_outputs import CausalLMOutputWithPast
 import time 
-
+from forgeserve.engine.config import GenerationConfig
 from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
 from forgeserve.model.loader import ModelLoader
+from forgeserve.kv_cache.cache import KVCache
 
 logger = get_logger(__name__)
 
@@ -153,6 +154,51 @@ class Runtime:
         logger.debug(f"Forward pass completed. Time taken for forward pass{time_taken_for}")
         return output
 
+    def prefill(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, KVCache]:
+        """
+        Prefill phase: process the full prompt once.
+
+        Passes use_cache=True so the model returns past_key_values.
+        Returns the logits for the last token and the populated KV cache.
+
+        Args:
+            input_ids: Full prompt token ids. Shape: (batch, prompt_len)
+            attention_mask: Attention mask. Shape: (batch, prompt_len)
+
+        Returns:
+            logits: Shape (batch, vocab_size) — logits for next token
+            cache: KVCache populated with K/V for all prompt tokens
+        """
+        logger.debug("Prefill: processing %d prompt token", input_ids.shape[1])
+
+        output = self.forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache = True,
+        )
+
+        assert output.logits is not None
+        assert output.past_key_values is not None
+
+        logits = output.logits[:, -1, :] # last token logits
+
+        cache = KVCache.from_prefill(
+            past_key_values=output.past_key_values,
+            prompt_len= input_ids.shape[1]
+        )
+
+        logger.debug(
+            "Prefill complete. Cache has %d layers, seq_len=%d",
+            cache.num_layers,
+            cache.seq_len,
+        )
+
+        return logits, cache
+
     def decode(self, token_ids: torch.Tensor) -> str:
         """
         Decodes the token IDs back to text using the loaded tokenizer.
@@ -169,3 +215,48 @@ class Runtime:
 
         logger.debug(f"Decoded text successfully.Time taken to decode{time_taken_dec}")
         return decoded_text
+
+    def decode_step(
+        self,
+        token_id: torch.Tensor,
+        attention_mask: torch.Tensor,
+        cache: KVCache
+        ) -> tuple[torch.Tensor, KVCache]:
+        """
+         Decode phase: process one new token using the KV cache.
+            
+        Key insight: input_ids contains ONLY the new token (shape: batch, 1).
+        The model attends to previous tokens via past_key_values, not input_ids.
+        The attention_mask must cover the FULL sequence (prompt + all decoded tokens).
+            
+        Args:
+            token_id: The last generated token. Shape: (batch, 1)
+            attention_mask: Full sequence mask. Shape: (batch, cache.seq_len + 1)
+            cache: Current KV cache
+            
+        Returns:
+            logits: Shape (batch, vocab_size)
+            updated_cache: KVCache with new token's K/V appended
+        """   
+        logger.debug(
+            "Decode step at position %d",
+            cache.seq_len,
+        )
+
+        output = self.forward(
+            input_ids = token_id, # only one new token
+            attention_mask = attention_mask, # full sequence mask 
+            past_key_values = cache.past_key_values,
+            use_cache = True,
+        )
+
+        assert output.logits is not None
+        assert output.past_key_values is not None
+
+        logits = output.logits[:, -1, :]
+        updated_cache = cache.update(output.past_key_values)
+
+        return logits, updated_cache
+
+
+    
