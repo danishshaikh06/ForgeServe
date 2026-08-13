@@ -75,6 +75,9 @@ from forgeserve.kv_cache.cache import KVCache
 from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
 from forgeserve.model.loader import ModelLoader
+from forgeserve.model.types import AttentionImplementation
+from torch.nn.attention import sdpa_kernel, SDPBackend
+import torch.nn.functional as F
 
 logger = get_logger(__name__)
 
@@ -87,12 +90,16 @@ class Runtime:
     def __init__(
         self,
         model_name: str,
+        attention: AttentionImplementation = AttentionImplementation.SDPA,
     ) -> None:
 
         self.model_name = model_name
         try:
-            logger.info(f"Initializing Runtime with model: {self.model_name}")
-            self.loader = ModelLoader(model_name=self.model_name)
+            logger.info(
+                "Initializing Runtime: model=%s attention=%s",
+                model_name, attention.value,
+            )
+            self.loader = ModelLoader(model_name=self.model_name, attention=attention)
 
         except Exception as e:
             logger.exception(f"Failed to initialize Runtime for {self.model_name}: {e}")
@@ -144,6 +151,7 @@ class Runtime:
             start = time.perf_counter()
 
             logger.debug("Performing forward pass through the model...")
+
             output = cast(
                 CausalLMOutputWithPast, self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
             )

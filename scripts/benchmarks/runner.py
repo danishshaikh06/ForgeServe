@@ -40,6 +40,8 @@ def run_naive_once(
     attention_mask = encoded["attention_mask"]
     prompt_tokens = input_ids.shape[1]
 
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache() 
     reset_peak_memory()
 
     # Measure TTFT (first forward pass over full prompt)
@@ -59,7 +61,10 @@ def run_naive_once(
         pass
 
     # Restart full measurement cleanly
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache() 
     reset_peak_memory()
+    
     encoded = runtime.tokenize(prompt, config.system_prompt)
     input_ids = encoded["input_ids"]
     attention_mask = encoded["attention_mask"]
@@ -111,8 +116,10 @@ def run_kvcache_once(
     attention_mask = encoded["attention_mask"]
     prompt_tokens = input_ids.shape[1]
 
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
     reset_peak_memory()
-
+    
     # Measure TTFT precisely
     with cuda_timer() as ttft_timer:
         logits, cache = runtime.prefill(input_ids, attention_mask)
@@ -121,7 +128,10 @@ def run_kvcache_once(
     ttft_ms = ttft_timer.elapsed_ms
 
     #Full generation measurement
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache() 
     reset_peak_memory()
+
     encoded = runtime.tokenize(prompt, config.system_prompt)
     input_ids = encoded["input_ids"]
     attention_mask = encoded["attention_mask"]
@@ -194,6 +204,43 @@ def run_scenario(
         AggregatedResult.from_results(naive_results),
         AggregatedResult.from_results(kvcache_results),
     )
+
+def run_kvcache_scenario(
+    runtime: Runtime,
+    sampler: Sampler,
+    prompt: str,
+    config: GenerationConfig,
+    engine_name: str,
+    warmup_runs: int = 2,
+    benchmark_runs: int = 5,
+) -> AggregatedResult:
+    """
+    Benchmark a single runtime using KV cache engine.
+    Used for Phase 3 where we compare attention backends,
+    not naive vs kvcache.
+    """
+    logger.info("Warming up %s with %d runs", engine_name, warmup_runs)
+    for i in range(warmup_runs):
+        logger.debug("Warmup %d/%d", i + 1, warmup_runs)
+        run_kvcache_once(runtime, sampler, prompt, config)
+
+    logger.info("Benchmarking %s with %d runs", engine_name, benchmark_runs)
+    results = []
+    for i in range(benchmark_runs):
+        logger.debug("Run %d/%d", i + 1, benchmark_runs)
+        result = run_kvcache_once(runtime, sampler, prompt, config)
+        # Override engine name for reporting
+        result = BenchmarkResult.compute(
+            engine_name=engine_name,
+            prompt_tokens=result.prompt_tokens,
+            generated_tokens=result.generated_tokens,
+            ttft_ms=result.ttft_ms,
+            total_time_ms=result.total_time_ms,
+            peak_memory_mb=result.peak_memory_mb,
+        )
+        results.append(result)
+
+    return AggregatedResult.from_results(results)
 
 # Internal helpers 
 def _append_token(

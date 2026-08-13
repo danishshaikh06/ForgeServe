@@ -20,10 +20,32 @@ from report import print_comparison, print_scenario_header
 # Scenarios: (prompt_length_words, max_new_tokens)
 # We use word counts and let the tokenizer determine exact token counts
 SCENARIOS = [
-    ("short prompt for testing",                              50),
-    ("short prompt for testing",                             200),
-    ("This is a medium length prompt that contains more context for the model to process during benchmarking",  50),
-    ("This is a medium length prompt that contains more context for the model to process during benchmarking", 200),
+    (
+        "Explain in detail how transformer attention mechanisms work, "
+        "covering queries keys and values, the mathematical operations, "
+        "and why the mechanism is effective for sequence modeling.",
+        100,
+    ),
+    (
+        "Explain in detail how transformer attention mechanisms work, "
+        "covering queries keys and values, the mathematical operations, "
+        "and why the mechanism is effective for sequence modeling.",
+        300,
+    ),
+    (
+        "Write a detailed technical explanation of how operating systems "
+        "manage virtual memory, covering page tables, TLB, page faults, "
+        "and the relationship between physical and virtual address spaces. "
+        "Include examples of how modern systems like Linux handle this.",
+        100,
+    ),
+    (
+        "Write a detailed technical explanation of how operating systems "
+        "manage virtual memory, covering page tables, TLB, page faults, "
+        "and the relationship between physical and virtual address spaces. "
+        "Include examples of how modern systems like Linux handle this.",
+        300,
+    ),
 ]
 
 WARMUP_RUNS = 2
