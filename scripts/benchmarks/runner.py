@@ -10,14 +10,13 @@ Design philosophy:
 from __future__ import annotations
 
 import torch
+from metrics import AggregatedResult, BenchmarkResult
+from timerrr import cuda_timer, get_peak_memory_mb, reset_peak_memory
 
+from forgeserve.engine.config import GenerationConfig
 from forgeserve.logger import get_logger
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.base import Sampler
-from forgeserve.engine.config import GenerationConfig
-
-from metrics import BenchmarkResult, AggregatedResult
-from timerrr import cuda_timer, reset_peak_memory, get_peak_memory_mb
 
 logger = get_logger(__name__)
 
@@ -41,7 +40,7 @@ def run_naive_once(
     prompt_tokens = input_ids.shape[1]
 
     torch.cuda.synchronize()
-    torch.cuda.empty_cache() 
+    torch.cuda.empty_cache()
     reset_peak_memory()
 
     # Measure TTFT (first forward pass over full prompt)
@@ -52,19 +51,15 @@ def run_naive_once(
 
     ttft_ms = ttft_timer.elapsed_ms
 
-    # Decode loop 
+    # Decode loop
     input_ids, attention_mask = _append_token(input_ids, attention_mask, first_token)
     generated = 1
 
-    with cuda_timer() as total_timer:
-        # Re-run first forward (total timer includes everything)
-        pass
-
     # Restart full measurement cleanly
     torch.cuda.synchronize()
-    torch.cuda.empty_cache() 
+    torch.cuda.empty_cache()
     reset_peak_memory()
-    
+
     encoded = runtime.tokenize(prompt, config.system_prompt)
     input_ids = encoded["input_ids"]
     attention_mask = encoded["attention_mask"]
@@ -119,17 +114,17 @@ def run_kvcache_once(
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
     reset_peak_memory()
-    
+
     # Measure TTFT precisely
     with cuda_timer() as ttft_timer:
         logits, cache = runtime.prefill(input_ids, attention_mask)
-        first_token = sampler.sample(logits)
+        #first_token = sampler.sample(logits)
 
     ttft_ms = ttft_timer.elapsed_ms
 
     #Full generation measurement
     torch.cuda.synchronize()
-    torch.cuda.empty_cache() 
+    torch.cuda.empty_cache()
     reset_peak_memory()
 
     encoded = runtime.tokenize(prompt, config.system_prompt)
@@ -242,7 +237,7 @@ def run_kvcache_scenario(
 
     return AggregatedResult.from_results(results)
 
-# Internal helpers 
+# Internal helpers
 def _append_token(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,

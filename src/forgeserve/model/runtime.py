@@ -76,8 +76,6 @@ from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
 from forgeserve.model.loader import ModelLoader
 from forgeserve.model.types import AttentionImplementation
-from torch.nn.attention import sdpa_kernel, SDPBackend
-import torch.nn.functional as F
 
 logger = get_logger(__name__)
 

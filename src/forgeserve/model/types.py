@@ -1,10 +1,9 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class AttentionImplementation(str, Enum):
+class AttentionImplementation(StrEnum):
     """
     Attention backend selection for HuggingFace models.
-
     EAGER: Standard PyTorch attention. Materializes full score matrix to HBM.
            Used as Phase 1/2 baseline. Always available.
 
@@ -20,7 +19,6 @@ class AttentionImplementation(str, Enum):
            More aggressive optimization than SDPA but less portable.
            Reserved for future phases.
     """
-
     EAGER = "eager"
     SDPA  = "sdpa"
     FLASH = "flash_attention_2"

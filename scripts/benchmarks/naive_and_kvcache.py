@@ -9,13 +9,12 @@ Expected pattern:
     If it doesn't, something is wrong with the implementation.
 """
 
+from report import print_comparison, print_scenario_header
+from runner import run_scenario
+
+from forgeserve.engine.config import GenerationConfig
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.greedy import GreedySampler
-from forgeserve.engine.config import GenerationConfig
-from forgeserve.model.loader import ModelLoader
-
-from runner import run_scenario
-from report import print_comparison, print_scenario_header
 
 # Scenarios: (prompt_length_words, max_new_tokens)
 # We use word counts and let the tokenizer determine exact token counts
@@ -59,7 +58,7 @@ def run(model_name: str) -> None:
     Args:
         model_name: HuggingFace model identifier to benchmark.
     """
-    print(f"\nForgeServe Phase 2 Benchmark")
+    print("\nForgeServe Phase 2 Benchmark")
     print(f"Model: {model_name}")
     print(f"Warmup runs: {WARMUP_RUNS} | Benchmark runs: {BENCHMARK_RUNS}")
 

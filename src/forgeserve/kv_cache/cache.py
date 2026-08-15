@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
+from transformers.cache_utils import Cache
 
 from forgeserve.kv_cache.exception import KVCacheNotInitializedError
-
-from transformers.cache_utils import Cache
 
 # HuggingFace past_key_values type alias
 # tuple of (K, V) per layer -> it refers to transformer layers

@@ -27,7 +27,7 @@ print(output[0]) # Returns Logits
 
 
 print('-' * 40)
-#print(output[1].shape) 
+#print(output[1].shape)
 
 print('-' * 40)
 print(output[0].shape)

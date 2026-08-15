@@ -6,10 +6,12 @@ Key insight:
     Never mix CPU and GPU timers for the same measurement.
 """
 from __future__ import annotations
+
 from contextlib import contextmanager
 from dataclasses import dataclass
 
 import torch
+
 
 @dataclass
 class TimingResult:

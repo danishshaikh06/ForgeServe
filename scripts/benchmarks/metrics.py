@@ -9,8 +9,7 @@ Design decision:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import torch
+from dataclasses import dataclass
 
 
 @dataclass

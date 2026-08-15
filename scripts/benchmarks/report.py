@@ -4,7 +4,9 @@ Prints a clean comparison table and speedup analysis.
 """
 
 from __future__ import annotations
+
 from metrics import AggregatedResult
+
 
 def print_comparison(
     naive: AggregatedResult,
@@ -16,7 +18,7 @@ def print_comparison(
     memory_overhead = kvcache.mean_peak_memory_mb - naive.mean_peak_memory_mb
 
     print("\n" + "=" * 65)
-    print(f"  BENCHMARK RESULTS")
+    print("  BENCHMARK RESULTS")
     print(f"  Prompt tokens : {naive.prompt_tokens}")
     print(f"  Generated     : {naive.generated_tokens} (naive) / {kvcache.generated_tokens} (kv_cache)")
     print(f"  Runs          : {naive.runs}")
@@ -48,7 +50,7 @@ def print_comparison_eager_sdpa(
     second_label = second.engine_name.upper()
 
     print("\n" + "=" * 65)
-    print(f"  BENCHMARK RESULTS")
+    print("  BENCHMARK RESULTS")
     print(f"  Prompt tokens : {first.prompt_tokens}")
     print(f"  Generated     : {first.generated_tokens} ({first_label}) / {second.generated_tokens} ({second_label})")
     print(f"  Runs          : {first.runs}")

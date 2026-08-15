@@ -14,16 +14,15 @@ Long sequences  → large benefit (what we measure here)
 """
 
 import gc
-import torch
 
+import torch
+from report import print_comparison_eager_sdpa
+from runner import run_kvcache_scenario
+
+from forgeserve.engine.config import GenerationConfig
 from forgeserve.model.runtime import Runtime
 from forgeserve.model.types import AttentionImplementation
 from forgeserve.sampler.greedy import GreedySampler
-from forgeserve.engine.config import GenerationConfig
-
-from runner import run_kvcache_scenario
-from report import print_comparison_eager_sdpa
-
 
 # ── Long prompt construction ──────────────────────────────────────────────────
 # We build prompts that are genuinely long by asking for detailed analysis.
@@ -118,10 +117,10 @@ def unload_runtime(runtime: Runtime) -> None:
 
 
 def run(model_name: str) -> None:
-    print(f"\nForgeServe Phase 3 Benchmark — EAGER vs SDPA")
+    print("\nForgeServe Phase 3 Benchmark — EAGER vs SDPA")
     print(f"Model: {model_name}")
     print(f"Warmup: {WARMUP_RUNS} | Benchmark: {BENCHMARK_RUNS}")
-    print(f"Scenarios designed to stress FlashAttention\n")
+    print("Scenarios designed to stress FlashAttention\n")
 
     sampler = GreedySampler()
 
@@ -172,10 +171,10 @@ def run(model_name: str) -> None:
         print("  Unloading SDPA runtime...")
         unload_runtime(sdpa_runtime)
 
-        #  Results 
+        #  Results
         print_comparison_eager_sdpa(eager_result, sdpa_result)
 
-        # Interpretation guide 
+        # Interpretation guide
         speedup = eager_result.mean_tpot_ms / sdpa_result.mean_tpot_ms
         mem_delta = sdpa_result.mean_peak_memory_mb - eager_result.mean_peak_memory_mb
 
@@ -191,7 +190,7 @@ def run(model_name: str) -> None:
         elif mem_delta < -10:
             print(f"  ✅ Small memory saving: {abs(mem_delta):.0f} MB")
         else:
-            print(f"  ℹ  Memory delta negligible — sequence too short for visible saving")
+            print("  ℹ  Memory delta negligible — sequence too short for visible saving")
 
 
 if __name__ == "__main__":

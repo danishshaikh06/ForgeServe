@@ -5,9 +5,10 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
-from forgeserve.model.types import AttentionImplementation
+
 from forgeserve.logger import get_logger
 from forgeserve.model.exception import ModelException
+from forgeserve.model.types import AttentionImplementation
 
 logger = get_logger(__name__)
 
@@ -90,10 +91,10 @@ class ModelLoader:
                 self.dtype, self.attention.value,
             )
             model = AutoModelForCausalLM.from_pretrained(
-                self.model_name, 
-                dtype=self.dtype, 
+                self.model_name,
+                dtype=self.dtype,
                 trust_remote_code=True,
-                attn_implementation= self.attention.value # Flash Attention -> automatically uses FlashAttention when conditions are met.
+                attn_implementation= self.attention.value
                 )
             model.to(self.device)  # type: ignore[arg-type]
             model.eval()  # Set the model to evaluation mode
@@ -101,9 +102,9 @@ class ModelLoader:
         except Exception as e:
             logger.exception("Failed to load model %s", self.model_name)
             raise ModelException(f"Failed to load model {self.model_name}: {e}") from e
-        
+
         self.verify_attention_backend(model)
 
         return model, tokenizer
-    
-        
+
+
