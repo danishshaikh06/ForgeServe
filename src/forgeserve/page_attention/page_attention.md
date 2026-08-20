@@ -250,7 +250,7 @@ These are the actual GPU tensors.
 
 # 5. Shape of one KVBlock
 
-Your code has:
+The code has:
 
 ```python
 shape = (
@@ -293,7 +293,7 @@ V = (4, 8, 16, 64)
 
 **No.**
 
-This was an important point we clarified.
+This was an important point to clarify.
 
 A single physical block contains KV data for **every layer**.
 
@@ -416,7 +416,7 @@ The block is now full.
 
 # 9. Why do we pre-create blocks?
 
-This was your important question.
+This is an important question.
 
 The blocks are created **before a request's prefill**.
 
@@ -478,15 +478,7 @@ _pool
 └── Block 4
 ```
 
-So yes, your earlier statement was correct:
-
 > **`_pool` keeps track of all the KV blocks that have been created.**
-
-The `_` prefix is just a Python naming convention meaning:
-
-> "This is intended to be an internal/private attribute of the class."
-
-It doesn't make it truly private.
 
 ---
 
@@ -580,7 +572,7 @@ It is essentially the **memory manager for KV blocks**.
 
 # 14. `allocate()`
 
-Your method:
+Method:
 
 ```python
 def allocate(
@@ -717,54 +709,7 @@ Meaning:
 
 ---
 
-# 17. `from_model_config()`
-
-This is a convenient class method for constructing `BlockManager`.
-
-You provide:
-
-```text
-num_blocks
-block_size
-model
-device
-```
-
-Then it gets model-specific information from:
-
-```python
-model.config
-```
-
-For example:
-
-```python
-num_layers = config.num_hidden_layers
-num_heads = config.num_key_value_heads
-head_dim = config.hidden_size // config.num_attention_heads
-```
-
-Then:
-
-```python
-return cls(...)
-```
-
-creates and returns a `BlockManager`.
-
-So:
-
-```python
-manager = BlockManager.from_model_config(...)
-```
-
-means:
-
-> "Create a BlockManager using my requested block settings and automatically determine the model-specific dimensions from the model."
-
----
-
-# 18. Now the PagedKVCache
+# 17. Now the PagedKVCache
 
 The `PagedKVCache` is the **per-request layer**.
 
@@ -907,7 +852,7 @@ V = (1, 2, 5, 4)
 
 # 23. Selecting one token
 
-Your code:
+code:
 
 ```python
 k_token = k[0, :, token_position, :]
@@ -953,7 +898,7 @@ for that one token.
 
 # 24. Why loop over layers?
 
-Your code:
+code:
 
 ```python
 for layer_idx, (k, v) in enumerate(past_key_values):
@@ -993,10 +938,11 @@ Block 3
 
 # 25. `current_block`
 
-Your code:
+code:
 
 ```python
-current_block = self.block_table[-1]
+block_index = token_position // self.block_size
+current_block = self.block_table[block_index]
 ```
 
 means:
@@ -1012,7 +958,7 @@ block_table = [Block 4, Block 3]
 Then:
 
 ```python
-self.block_table[-1]
+self.block_table[block_index]
 ```
 
 gives:
@@ -1114,7 +1060,7 @@ seq_len = 5
 
 **before the prefill forward pass.**
 
-This answers your earlier question:
+This is the question:
 
 > How do we know Request A needs 5 tokens?
 
@@ -1404,7 +1350,7 @@ This is similar to pages in virtual memory.
 
 # 37. `gather()`
 
-Your `PagedKVCache` also has:
+`PagedKVCache` also has:
 
 ```text
 gather()
@@ -1438,45 +1384,7 @@ Logical contiguous KV
 HuggingFace forward
 ```
 
-A true paged-attention implementation may avoid physically gathering everything by letting the attention kernel read the blocks directly, but **your class's stated design uses `gather()` as the bridge to the representation HuggingFace expects.**
-
----
-
-# 38. What are logits?
-
-The KV cache and logits have different purposes.
-
-After the final layer:
-
-```text
-hidden state
-     ↓
-LM head
-     ↓
-logits
-```
-
-Logits are scores for the vocabulary.
-
-Example:
-
-```text
-"cat"   → 1.2
-"dog"   → 3.8
-"hello" → 0.4
-```
-
-The system uses the logits to choose/sample the next token.
-
-So:
-
-```text
-KV cache
-→ memory of previous attention K/V
-
-Logits
-→ scores used to choose the next token
-```
+Note: A true paged-attention implementation may avoid physically gathering everything by letting the attention kernel read the blocks directly, but **This class's stated design uses `gather()` as the bridge to the representation HuggingFace expects.**
 
 ---
 

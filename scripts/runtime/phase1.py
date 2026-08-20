@@ -17,10 +17,17 @@ print(attention_mask.shape)
 print('-' * 40)
 print(output)
 print('-' * 40)
-print(output.logits)
+print(output.logits.shape)
 print('-' * 40)
 print(type(output))
 
 print('-' * 40)
 print(output.past_key_values)
+
+print('-' * 60)
+for layer_idx, (key, value) in enumerate(output.past_key_values):
+    print(f"Layer {layer_idx}:")
+    print(f"  key shape:   {key.shape}")
+    print(f"  value shape: {value.shape}")
+
 
