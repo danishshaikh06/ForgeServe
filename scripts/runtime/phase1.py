@@ -8,7 +8,7 @@ input_ids = tokenizer["input_ids"]
 attention_mask = tokenizer["attention_mask"]
 output = run.forward(input_ids, attention_mask)
 
-print(input_ids)
+print(f"the len of the tokens are {len(input_ids)}")
 print(input_ids.shape)
 
 print(attention_mask)
@@ -22,12 +22,22 @@ print('-' * 40)
 print(type(output))
 
 print('-' * 40)
-print(output.past_key_values)
+print(type(output.past_key_values))
+print(dir(output.past_key_values))
 
 print('-' * 60)
 for layer_idx, (key, value) in enumerate(output.past_key_values):
     print(f"Layer {layer_idx}:")
     print(f"  key shape:   {key.shape}")
     print(f"  value shape: {value.shape}")
+
+print('---' * 40)
+print(len(output.past_key_values.layers))
+
+layer = output.past_key_values.layers[0]
+
+print(type(layer))
+print(dir(layer))
+
 
 

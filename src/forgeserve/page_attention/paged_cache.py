@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import torch 
 
-from forgeserve.page_attention.block import KVBlock
+from transformers.cache_utils import DynamicCache
+
 from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
+from forgeserve.page_attention.block import KVBlock
 from forgeserve.logger import get_logger
 
 logger = get_logger(__name__)
@@ -62,7 +64,7 @@ class PagedKVCache:
 
     def write_token(
         self,
-        past_key_values: PastKeyValues,
+        past_key_values,
         token_position: int,
     ) -> None:
         """
@@ -103,9 +105,28 @@ class PagedKVCache:
             token and store them in this request's current KV block."
         """
         block_index = token_position // self.block_size
+
+        if block_index >= len(self.block_table):
+            raise KVCacheOutOfMemoryError(
+                f"Block index {block_index} out of range. "
+                f"Block table has {len(self.block_table)} blocks. "
+                f"Pre-allocation was insufficient for token_position={token_position}."
+            )
+        
         current_block = self.block_table[block_index]
 
-        for layer_idx, (k,v) in enumerate(past_key_values):
+        if current_block.is_full:
+            raise KVCacheOutOfMemoryError(
+                    f"Block {block_index} is full at token_position={token_position}. "
+                    f"Pre-allocation calculation was incorrect."
+                )
+
+        for layer_idx in range(len(past_key_values.layers)):
+            layer = past_key_values.layers[layer_idx]
+
+            k = layer.keys  # (1, num_heads, seq_len, head_dim)
+            v = layer.values  # (1, num_heads, seq_len, head_dim)
+
             # Extract single token: (batch=1, num_heads, 1, head_dim)
             # → squeeze to (num_heads, head_dim)
             k_token = k[0, :, token_position, :]
@@ -214,6 +235,39 @@ class PagedKVCache:
             result.append((k_full.unsqueeze(0), v_full.unsqueeze(0)))
 
         return tuple(result)
+
+    def gather_as_dynamic_cache(self) -> DynamicCache:
+        """
+        Assemble blocks into a HuggingFace DynamicCache object.
+
+        Modern HuggingFace (4.38+) requires DynamicCache instead of
+        raw past_key_values tuples what we have collected from the above function gather() and store in a tuple i.e result which is then passed into the forward pass . DynamicCache wraps the same K/V tensors but provides the Cache interface the model expects
+        (get_seq_length, update, etc).
+
+        Returns:
+            DynamicCache populated with gathered K/V tensors.
+        """
+        cache = DynamicCache()
+
+        for layer_idx in range (self.num_layers):
+            k_parts = []
+            v_parts = []
+
+            for block in self.block_table:
+                filled = block.num_filled
+                if filled == 0:
+                    continue
+                #shape: [num_layers, num_heads, block_size, head_dim]
+                k_parts.append(block.k_cache[layer_idx, :, :filled, :])
+                v_parts.append(block.v_cache[layer_idx, :, :filled, :])
+
+            # SHape:(1, num_heads, seq_len, head_dim)
+            k_full = torch.cat(k_parts, dim=1).unsqueeze(0)
+            v_full = torch.cat(v_parts, dim=1).unsqueeze(0)
+
+            cache.update(k_full, v_full, layer_idx)
+
+        return cache
 
 
 

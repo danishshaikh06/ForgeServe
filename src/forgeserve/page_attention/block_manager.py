@@ -13,11 +13,13 @@ Design: pre-allocation at startup
     - No cudaMalloc during live inference = No latency Spikes 
 """
 from __future__ import annotations
+
 import torch 
+
 from forgeserve.page_attention.block import KVBlock
 from forgeserve.page_attention.exception import (
     KVCacheOutOfMemoryError,
-    KVCacheBlockNotOwnedError
+    KVCacheBlockNotOwnedError,
 )
 from forgeserve.logger import get_logger
 
@@ -36,13 +38,13 @@ class BlockManager:
         device: GPU device string 
     """
     def __init__(
-            self,
-            num_blocks: int,
-            block_size: int,
-            num_layers: int,
-            num_heads: int, 
-            head_dim: int, 
-            device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        self,
+        num_blocks: int,
+        block_size: int,
+        num_layers: int,
+        num_heads: int, 
+        head_dim: int, 
+        device: str = "cuda",
     ) -> None:
         self.num_blocks = num_blocks
         self.block_size = block_size
@@ -129,7 +131,7 @@ class BlockManager:
 
     def free(
             self, 
-            request_id: str
+            request_id: str,
             ) -> None:
         """
         Return all blocks owned by a request to the free pool.
@@ -168,7 +170,7 @@ class BlockManager:
         """
         return self.num_blocks - self.num_free_blocks 
 
-    @property
+   
     def can_allocate(self, num_blocks: int = 1) -> bool:
         """Check if allocation is possible without raising."""
         return len(self._free_stack) >= num_blocks

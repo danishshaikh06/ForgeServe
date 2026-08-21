@@ -36,10 +36,20 @@ class PagedRuntime(Runtime):
     def __init__(
             self,
             model_name: str,
-            block_manager: BlockManager,
-            attention: AttentionImplementation.SDPA,
+            attention: AttentionImplementation = AttentionImplementation.SDPA,
     ) -> None:
         super().__init__(model_name=model_name, attention=attention)
+        self.block_manager: BlockManager | None = None
+        logger.info("PagedRuntime initialized. Awaiting block manager attachment.")
+
+    def attach_block_manager(self, block_manager: BlockManager) -> None:
+        """
+        Attach a pre-initialized BlockManager to this runtime.
+        Must be called before any paged_prefill or paged_decode_step calls.
+
+        Separated from __init__ because BlockManager requires model config
+        which is only available after the model is loaded.
+        """
         self.block_manager = block_manager
 
         logger.info(
@@ -55,6 +65,14 @@ class PagedRuntime(Runtime):
                 block_manager.head_dim,
             ),
         )
+
+    def _require_block_manager(self) -> None:
+        """Guard method. Call at start of any method that needs block_manager."""
+        if self.block_manager is None:
+            raise RuntimeError(
+                "BlockManager not attached. Call attach_block_manager() "
+                "after initializing PagedRuntime and before generating."
+            )
 
     def paged_prefill(
             self,
@@ -80,6 +98,8 @@ class PagedRuntime(Runtime):
             logits:       Shape (1, vocab_size)
             paged_cache:  PagedKVCache with all prompt tokens stored in blocks
         """
+        self._require_block_manager()
+
         if request_id is None:
             request_id = str(uuid.uuid4())[:8]
 
@@ -161,6 +181,8 @@ class PagedRuntime(Runtime):
             logits:       Shape (1, vocab_size)
             paged_cache:  Same object, updated with new token's KV
         """
+        self._require_block_manager()
+        
         current_block = paged_cache.block_table[-1]
         if current_block.is_full:
             if not self.block_manager.can_allocate(1):
@@ -178,7 +200,7 @@ class PagedRuntime(Runtime):
 
         # Gather blocks (scattered in physical block location)-> contigous past keys and values 
         #This is the bridge betwwen paged storage and hugging face api 
-        gathered_kv = paged_cache.gather()
+        gathered_kv = paged_cache.gather_as_dynamic_cache()
 
         logger.debug(
             "Decode step: request=%s position=%d blocks=%d",
@@ -194,6 +216,9 @@ class PagedRuntime(Runtime):
             past_key_values = gathered_kv,
             use_cache = True 
         )
+
+        assert output.logits is not None
+        assert output.past_key_values is not None
 
         # Extract last token Key and Value vector and write to block 
         # # output.past_key_values has shape (1, num_heads, seq_len+1, head_dim)
@@ -220,7 +245,7 @@ class PagedRuntime(Runtime):
 
     def _extract_last_token_kv(
             self,
-            past_key_values: tuple,
+            past_key_values,
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """
         Extract the last token's K and V from all layers.
@@ -234,14 +259,20 @@ class PagedRuntime(Runtime):
             k_token shape: (num_heads, head_dim)
         """
         result = []
-        for k,v in past_key_values:
+        for layer_idx in range(len(past_key_values.layers)):
+            layer = past_key_values.layers[layer_idx]
+
+            k =  layer.keys # (1, num_heads, seq_len, head_dim)
+            v = layer.values # (1, num_heads, seq_len, head_dim)
+
              # Extract position -1: the newly decoded token
             k_new = k[0, :, -1, :] #  (num_heads, head_dim)
             v_new = v[0, :, -1, :] #  (num_heads, head_dim)
+
             result.append((k_new, v_new))
         return result 
 
-    def _write_tokne_kv_to_cache(
+    def _write_token_kv_to_cache(
             self,
             token_kv: list[tuple[torch.Tensor, torch.Tensor]],
             paged_cache: PagedKVCache,
