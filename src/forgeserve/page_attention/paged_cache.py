@@ -12,13 +12,12 @@ Two operations:
 
 from __future__ import annotations
 
-import torch 
-
+import torch
 from transformers.cache_utils import DynamicCache
 
-from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
-from forgeserve.page_attention.block import KVBlock
 from forgeserve.logger import get_logger
+from forgeserve.page_attention.block import KVBlock
+from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
 
 logger = get_logger(__name__)
 
@@ -42,19 +41,19 @@ class PagedKVCache:
             self,
             request_id: str,
             initial_blocks: list[KVBlock],
-            block_size: int, 
+            block_size: int,
             num_layers: int,
     ) -> None:
         self.request_id = request_id
-        self.block_size = block_size 
-        self.num_layers = num_layers 
+        self.block_size = block_size
+        self.num_layers = num_layers
 
         # Block Table: ordered list of physical blocks (Real token index)
         # Index in list = Logical block index (Aloocated in gpu memory)
         self.block_table: list[KVBlock] = list(initial_blocks)
 
         #Total tokens written so far
-        self.seq_len: int = 0 
+        self.seq_len: int = 0
 
         logger.debug(
             "PagedKVCache created for request '%s' with %d initial block(s)",
@@ -64,7 +63,7 @@ class PagedKVCache:
 
     def write_token(
         self,
-        past_key_values,
+        past_key_values: DynamicCache,
         token_position: int,
     ) -> None:
         """
@@ -112,7 +111,7 @@ class PagedKVCache:
                 f"Block table has {len(self.block_table)} blocks. "
                 f"Pre-allocation was insufficient for token_position={token_position}."
             )
-        
+
         current_block = self.block_table[block_index]
 
         if current_block.is_full:
@@ -126,6 +125,11 @@ class PagedKVCache:
 
             k = layer.keys  # (1, num_heads, seq_len, head_dim)
             v = layer.values  # (1, num_heads, seq_len, head_dim)
+
+            if k is None or v is None:
+                raise RuntimeError(
+                    f"KV cache is not initialized for layer {layer_idx}"
+                )
 
             # Extract single token: (batch=1, num_heads, 1, head_dim)
             # → squeeze to (num_heads, head_dim)
@@ -215,7 +219,7 @@ class PagedKVCache:
             for block in self.block_table:
                 filled = block.num_filled
                 if filled == 0:
-                    continue 
+                    continue
 
                 #Extract filled portion of this block
                 # Shape: (num_heads, filled, head_dim)
@@ -241,7 +245,9 @@ class PagedKVCache:
         Assemble blocks into a HuggingFace DynamicCache object.
 
         Modern HuggingFace (4.38+) requires DynamicCache instead of
-        raw past_key_values tuples what we have collected from the above function gather() and store in a tuple i.e result which is then passed into the forward pass . DynamicCache wraps the same K/V tensors but provides the Cache interface the model expects
+        raw past_key_values tuples what we have collected from the above function gather().
+        which is then passed into the forward pass.
+        DynamicCache wraps the same K/V tensors but provides the Cache interface the model expects.
         (get_seq_length, update, etc).
 
         Returns:
@@ -272,4 +278,4 @@ class PagedKVCache:
 
 
 
-        
+

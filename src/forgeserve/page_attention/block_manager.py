@@ -1,49 +1,50 @@
 """
-BlockManager: Global Allocator For KV Block Pool 
+BlockManager: Global Allocator For KV Block Pool
 
 Responsibilites:
         - Pre-allocate all blocks at startup (zero cudaMalloc during inference)
         - Maintain free block stack (O(1) allocation and pop/free)
-        - Track which request owns which block 
-        - Raise OOMException when pool is exausted 
+        - Track which request owns which block
+        - Raise OOMException when pool is exausted
 
-Design: pre-allocation at startup 
+Design: pre-allocation at startup
     - All GPU memory for KV cache is allocated here, once.
     - Allocation during inference = O(1) pointer operation from free stack.
-    - No cudaMalloc during live inference = No latency Spikes 
+    - No cudaMalloc during live inference = No latency Spikes
 """
 from __future__ import annotations
 
-import torch 
+import torch
+from transformers import PreTrainedModel
 
+from forgeserve.logger import get_logger
 from forgeserve.page_attention.block import KVBlock
 from forgeserve.page_attention.exception import (
-    KVCacheOutOfMemoryError,
     KVCacheBlockNotOwnedError,
+    KVCacheOutOfMemoryError,
 )
-from forgeserve.logger import get_logger
 
 logger = get_logger(__name__)
 
 class BlockManager:
     """
-    Manages a fixed pool of KVBlocks pre-allocated on GPU 
+    Manages a fixed pool of KVBlocks pre-allocated on GPU
 
     Args:
-        num_blocks: Total blocks in pool 
+        num_blocks: Total blocks in pool
         block_size: Token per block (vLLM default: 16)
         num_layers: Transformer layer count
         num_heads: Attention heads per layer
         head_dim: Dimensions per attention head
-        device: GPU device string 
+        device: GPU device string
     """
     def __init__(
         self,
         num_blocks: int,
         block_size: int,
         num_layers: int,
-        num_heads: int, 
-        head_dim: int, 
+        num_heads: int,
+        head_dim: int,
         device: str = "cuda",
     ) -> None:
         self.num_blocks = num_blocks
@@ -59,7 +60,7 @@ class BlockManager:
             self._total_memory_mb(num_blocks, block_size, num_layers, num_heads,head_dim),
         )
 
-        # pre-allocate all blocks - this is the only cuda malloc 
+        # pre-allocate all blocks - this is the only cuda malloc
         # keeps track of all the KVBlock objects that have been created.
         self._pool: list[KVBlock] = [
             KVBlock(
@@ -73,12 +74,12 @@ class BlockManager:
             for i in range(num_blocks)
         ]
 
-        #Free block stack - O(1) push and pop 
+        #Free block stack - O(1) push and pop
         #Stack means recently freed blocks reused first (cache warm)
         self._free_stack: list[int] = list(range(num_blocks))
 
         # Keeps the track of request_id along with block_ids
-        self._owned: dict[str, list[int]] = {} 
+        self._owned: dict[str, list[int]] = {}
 
         logger.info(
             "BlockManager ready. %d blocks available",
@@ -130,7 +131,7 @@ class BlockManager:
         return allocated
 
     def free(
-            self, 
+            self,
             request_id: str,
             ) -> None:
         """
@@ -146,7 +147,7 @@ class BlockManager:
             raise KVCacheBlockNotOwnedError(
                  f"Request '{request_id}' has no allocated blocks to free."
             )
-        # Append the free blocks back in the stack 
+        # Append the free blocks back in the stack
         block_ids = self._owned.pop(request_id)
         for block_id in block_ids:
             self._free_stack.append(block_id)
@@ -165,12 +166,12 @@ class BlockManager:
 
     @property
     def num_used_blocks(self) -> int:
-        """ 
+        """
         Returns: How many blocks hvae been allocated
         """
-        return self.num_blocks - self.num_free_blocks 
+        return self.num_blocks - self.num_free_blocks
 
-   
+
     def can_allocate(self, num_blocks: int = 1) -> bool:
         """Check if allocation is possible without raising."""
         return len(self._free_stack) >= num_blocks
@@ -196,21 +197,21 @@ class BlockManager:
             Total KV-cache memory in MiB.
         """
         bytes_per_block = (
-            2 # K and V 
+            2 # K and V
             * num_layers
             * num_heads
             * block_size
             * head_dim
-            * 2 # bfloat16 = 2bytes -> 1 byte = 8 bits 
+            * 2 # bfloat16 = 2bytes -> 1 byte = 8 bits
         )
-        return (num_blocks * bytes_per_block) / (1024 ** 2) 
-    
+        return (num_blocks * bytes_per_block) / (1024 ** 2)
+
     @classmethod
     def from_model_config(
         cls,
         num_blocks: int,
         block_size: int,
-        model,
+        model: PreTrainedModel,
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ) -> BlockManager:
         """
@@ -227,7 +228,7 @@ class BlockManager:
         config = model.config
         num_layers = config.num_hidden_layers
         num_heads = config.num_key_value_heads # GQA-aware
-        head_dim = config.hidden_size // config.num_attention_heads 
+        head_dim = config.hidden_size // config.num_attention_heads
 
         return cls(
             num_blocks = num_blocks,

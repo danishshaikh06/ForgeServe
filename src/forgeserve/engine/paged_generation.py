@@ -10,17 +10,17 @@ when generation completes.
 """
 from __future__ import annotations
 
-import time 
+import time
 import uuid
 
-import torch 
+import torch
 
+from forgeserve.engine.config import GenerationConfig
 from forgeserve.engine.exception import GenerationException
 from forgeserve.engine.response import GenerationResponse
-from forgeserve.engine.config import GenerationConfig
-from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
 from forgeserve.logger import get_logger
 from forgeserve.model.paged_runtime import PagedRuntime
+from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
 from forgeserve.sampler.base import Sampler
 
 logger = get_logger(__name__)
@@ -39,7 +39,7 @@ class PagedGenerationEngine:
             sampler: Sampler,
     ) -> None:
         self.runtime = runtime
-        self.sampler = sampler 
+        self.sampler = sampler
 
     def generate(
             self,
@@ -78,7 +78,7 @@ class PagedGenerationEngine:
             attention_mask = encoded["attention_mask"]
 
             try:
-                # prefill 
+                # prefill
                 logits, paged_cache = self.runtime.paged_prefill(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -91,7 +91,7 @@ class PagedGenerationEngine:
                 )
                 raise
 
-            generated = 0 
+            generated = 0
             is_eos = False
 
             # Decode loop
@@ -106,7 +106,7 @@ class PagedGenerationEngine:
                         "EOS at request='%s' position=%d",
                         request_id, generated,
                     )
-                    break 
+                    break
 
                 input_ids, attention_mask = self._append_token(
                     input_ids, attention_mask, next_token
@@ -150,7 +150,7 @@ class PagedGenerationEngine:
             ) from exc
 
         finally:
-            # Always Free the blocks, even if generation fails that is why it is in this block 
+            # Always Free the blocks, even if generation fails that is why it is in this block
             # Failure to free = permanent gpu memory leak
             try:
                 self.runtime.free_request(request_id)
@@ -164,7 +164,7 @@ class PagedGenerationEngine:
                 )
 
     def _append_token(
-            self, 
+            self,
             input_ids: torch.Tensor,
             attention_mask: torch.Tensor,
             next_token: torch.Tensor,
@@ -183,7 +183,7 @@ class PagedGenerationEngine:
                     device= attention_mask.device,
                 ),
             ),
-            dim = -1 
+            dim = -1
         )
 
         return input_ids, attention_mask

@@ -13,14 +13,16 @@ Only KV storage strategy changes internally.
 from __future__ import annotations
 
 import uuid
-import torch 
 
+import torch
+from transformers.cache_utils import DynamicCache
+
+from forgeserve.logger import get_logger
 from forgeserve.model.runtime import Runtime
 from forgeserve.model.types import AttentionImplementation
 from forgeserve.page_attention.block_manager import BlockManager
-from forgeserve.page_attention.paged_cache import PagedKVCache
 from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
-from forgeserve.logger import get_logger
+from forgeserve.page_attention.paged_cache import PagedKVCache
 
 logger = get_logger(__name__)
 
@@ -66,13 +68,14 @@ class PagedRuntime(Runtime):
             ),
         )
 
-    def _require_block_manager(self) -> None:
-        """Guard method. Call at start of any method that needs block_manager."""
+    def _require_block_manager(self) -> BlockManager:
+        """Return the block manager, or raise if not attached."""
         if self.block_manager is None:
             raise RuntimeError(
                 "BlockManager not attached. Call attach_block_manager() "
                 "after initializing PagedRuntime and before generating."
             )
+        return self.block_manager
 
     def paged_prefill(
             self,
@@ -98,7 +101,7 @@ class PagedRuntime(Runtime):
             logits:       Shape (1, vocab_size)
             paged_cache:  PagedKVCache with all prompt tokens stored in blocks
         """
-        self._require_block_manager()
+        block_manager = self._require_block_manager()
 
         if request_id is None:
             request_id = str(uuid.uuid4())[:8]
@@ -108,7 +111,7 @@ class PagedRuntime(Runtime):
         # How many blocks do we need for this prompt?
         # Ceiling division: 13 tokens with block_size=16 needs 1 block
         # 17 tokens with block_size=16 needs 2 blocks
-        num_blocks_needed = (prompt_len + self.block_manager.block_size - 1) // self.block_manager.block_size
+        num_blocks_needed = (prompt_len + block_manager.block_size - 1) // block_manager.block_size
 
         logger.debug(
             "Paged prefill: request=%s prompt_len=%d blocks_needed=%d",
@@ -116,14 +119,14 @@ class PagedRuntime(Runtime):
         )
 
         # Allocate blocks — raises KVCacheOutOfMemoryError if pool exhausted
-        blocks = self.block_manager.allocate(request_id, num_blocks_needed)
+        blocks = block_manager.allocate(request_id, num_blocks_needed)
 
-        #create page cache 
+        #create page cache
         paged_cache = PagedKVCache(
             request_id = request_id,
             initial_blocks= blocks,
-            block_size=self.block_manager.block_size,
-            num_layers=self.block_manager.num_layers,
+            block_size=block_manager.block_size,
+            num_layers=block_manager.num_layers,
         )
 
         #forward pass
@@ -140,9 +143,15 @@ class PagedRuntime(Runtime):
         # past_key_values contains KV for all prompt tokens
         # We write them one by one into the block structure
         for token_pos in range(prompt_len):
-            # write down the key and value cache for each layer in the blocks 
+            # write down the key and value cache for each layer in the blocks
+            past_key_values = output.past_key_values
+
+            if not isinstance(past_key_values, DynamicCache):
+                raise TypeError(
+                    f"Expected DynamicCache, got {type(past_key_values).__name__}"
+                )
             paged_cache.write_token(
-                past_key_values=output.past_key_values,
+                past_key_values=past_key_values,
                 token_position=token_pos,
             )
         # Shape [batch_size, sequence_length, vocab_size]
@@ -181,25 +190,25 @@ class PagedRuntime(Runtime):
             logits:       Shape (1, vocab_size)
             paged_cache:  Same object, updated with new token's KV
         """
-        self._require_block_manager()
-        
+        block_manager= self._require_block_manager()
+
         current_block = paged_cache.block_table[-1]
         if current_block.is_full:
-            if not self.block_manager.can_allocate(1):
+            if not block_manager.can_allocate(1):
                 raise KVCacheOutOfMemoryError(
                     f"Request '{paged_cache.request_id}': block pool exhausted "
                     f"during decode at position {paged_cache.seq_len}. "
                     f"Request must wait for blocks to be freed."
                 )
-            new_blocks = self.block_manager.allocate(paged_cache.request_id, 1)
+            new_blocks = block_manager.allocate(paged_cache.request_id, 1)
             paged_cache.append_block(new_blocks[0])
             logger.debug(
                 "Request '%s': allocated new block at seq_len=%d",
                 paged_cache.request_id, paged_cache.seq_len,
             )
 
-        # Gather blocks (scattered in physical block location)-> contigous past keys and values 
-        #This is the bridge betwwen paged storage and hugging face api 
+        # Gather blocks (scattered in physical block location)-> contigous past keys and values
+        #This is the bridge betwwen paged storage and hugging face api
         gathered_kv = paged_cache.gather_as_dynamic_cache()
 
         logger.debug(
@@ -209,22 +218,28 @@ class PagedRuntime(Runtime):
             len(paged_cache.block_table),
         )
 
-        # Forward pass with sigle new token 
+        # Forward pass with sigle new token
         output = self.forward(
             input_ids=token_id,
             attention_mask=attention_mask,
             past_key_values = gathered_kv,
-            use_cache = True 
+            use_cache = True
         )
 
         assert output.logits is not None
         assert output.past_key_values is not None
 
-        # Extract last token Key and Value vector and write to block 
+        past_key_values = output.past_key_values
+        if not isinstance(past_key_values, DynamicCache):
+            raise TypeError(
+                f"Expected DynamicCache, got {type(past_key_values).__name__}"
+            )
+
+        # Extract last token Key and Value vector and write to block
         # # output.past_key_values has shape (1, num_heads, seq_len+1, head_dim)
         # We only want position -1: the new token we just decoded
         # Everything else is already in our blocks
-        new_token_kv = self._extract_last_token_kv(output.past_key_values)
+        new_token_kv = self._extract_last_token_kv(past_key_values)
         self._write_token_kv_to_cache(new_token_kv, paged_cache)
 
         logits = output.logits[:, -1, :]
@@ -240,12 +255,13 @@ class PagedRuntime(Runtime):
         Must be called after generation completes.
         Failure to call this leaks GPU memory.
         """
-        self.block_manager.free(request_id)
+        block_manager = self._require_block_manager()
+        block_manager.free(request_id)
         logger.debug("Freed blocks for request '%s'", request_id)
 
     def _extract_last_token_kv(
             self,
-            past_key_values,
+            past_key_values: DynamicCache,
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """
         Extract the last token's K and V from all layers.
@@ -265,12 +281,16 @@ class PagedRuntime(Runtime):
             k =  layer.keys # (1, num_heads, seq_len, head_dim)
             v = layer.values # (1, num_heads, seq_len, head_dim)
 
-             # Extract position -1: the newly decoded token
+            if k is None or v is None:
+                raise RuntimeError(
+                    f"KV cache is not initialized for layer {layer_idx}"
+                )
+            # Extract position -1: the newly decoded token
             k_new = k[0, :, -1, :] #  (num_heads, head_dim)
             v_new = v[0, :, -1, :] #  (num_heads, head_dim)
 
             result.append((k_new, v_new))
-        return result 
+        return result
 
     def _write_token_kv_to_cache(
             self,
@@ -292,7 +312,7 @@ class PagedRuntime(Runtime):
         current_block.increment_filled()
         paged_cache.seq_len+=1
 
-    
+
 
 
 

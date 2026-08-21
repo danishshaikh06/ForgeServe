@@ -16,8 +16,11 @@ Design decision:
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-import torch 
+
+import torch
+
 
 @dataclass
 class KVBlock:
@@ -36,7 +39,7 @@ class KVBlock:
         v_cache:     Value tensor. Shape: (num_layers, num_heads, block_size, head_dim)
     """
     block_id: int
-    block_size: int 
+    block_size: int
     num_layers: int
     num_heads: int
     head_dim: int
@@ -44,19 +47,18 @@ class KVBlock:
     num_filled: int = field(default=0, init=True)
 
     # KV storage tensors - allocated once, resued accross requests
-    k_cache: torch.tensor = field(init=False)
-    v_cache: torch.tensor = field(init=False)
+    k_cache: torch.Tensor = field(init=False)
+    v_cache: torch.Tensor = field(init=False)
 
     def __post_init__(self) -> None:
         """
-        Pre-allocate GPU memory for this block 
-        Shape:(num_layers, num_heads, block_size, head_dim) 
-        
-        The K and V cache are stored in the same block as per block size but in seperate tensors
+        Pre-allocate GPU memory for this block.
+        Shape:(num_layers, num_heads, block_size, head_dim).
+        The K and V cache are stored in the same block as per block size but in seperate tensors.
         """
         shape = (self.num_layers, self.num_heads, self.block_size, self.head_dim)
-        self.k_cache = torch.zeros(shape, dtype=torch.bfloat16, device = self.device)
-        self.v_cache = torch.zeros(shape, dtype=torch.bfloat16, device = self.device)
+        self.k_cache = torch.zeros(shape, dtype=torch.bfloat16, device=self.device)
+        self.v_cache = torch.zeros(shape, dtype=torch.bfloat16, device=self.device)
 
     @property
     def is_full(self) -> bool:
@@ -65,7 +67,7 @@ class KVBlock:
         """
         return self.num_filled >= self.block_size
 
-    @property 
+    @property
     def num_free_slot(self) -> int:
         """
         How many token slot remain in this block
@@ -80,10 +82,9 @@ class KVBlock:
     ) -> None:
         """
         Write one token's K and V into the next free slot.
-
         Args:
-            layer_idx: Which transformer layer these kv tensors are from 
-            k: Key tensor for this token, Shape: (num_heads, head_dim) -> This is for just a single token where each num_head has head_dim dimension 
+            layer_idx: Which transformer layer these kv tensors are from
+            k: Key tensor for this token, Shape: (num_heads, head_dim)
             v: Value tensor for this token, Shape: (num_heads, head_dim)
         """
         if self.is_full:
@@ -93,8 +94,8 @@ class KVBlock:
             )
         slot = self.num_filled
          # In layer idx, at token position slot, write the K and v values for all heads.
-        self.k_cache[layer_idx, :, slot, : ] = k 
-        self.v_cache[layer_idx, :, slot, : ] = v 
+        self.k_cache[layer_idx, :, slot, : ] = k
+        self.v_cache[layer_idx, :, slot, : ] = v
 
     def increment_filled(self) -> None:
         """
@@ -108,6 +109,6 @@ class KVBlock:
         Reset this block for reuse by a new request.
         Does not zero the memory — the fill pointer guards stale data.
         """
-        self.num_filled = 0 
+        self.num_filled = 0
 
 
