@@ -1,33 +1,12 @@
 Phase 3 Summary — FlashAttention via SDPA
 Model: Qwen2.5-0.5B-Instruct
 GPU:   RTX 4070
-
-Results:
-  TPOT improvement:    ~10% consistent across medium/long sequences
-  TTFT improvement:    ~12% on long prompts (364 tokens)
-  Memory improvement:  Theoretically ~97MB at 364 tokens
-                       Not measurable due to allocator peak tracking
-                       limitations across sequential model loads
-
-Expected improvement on larger models:
-  7B  model, 2048 tokens: ~30-40% TPOT improvement
-  70B model, 4096 tokens: ~40-60% TPOT improvement
-
-Conclusion:
-  FlashAttention is correctly integrated and functioning.
-  Benefit is sequence-length and model-size dependent.
-  Current benchmark setup undersells the optimization
-  due to small model size and moderate sequence lengths.
-
 ----------------------------------------------------------------------------------------------------------
 ForgeServe Phase 3 Benchmark — EAGER vs SDPA
 Model: Qwen/Qwen2.5-0.5B-Instruct
 Warmup: 2 | Benchmark: 5
 Scenarios designed to stress FlashAttention
 
->>> Scenario: short_prompt_100gen
-    Prompt words: 6  (~8 tokens)
-    Max generate: 100 tokens
 =================================================================
   BENCHMARK RESULTS
   Prompt tokens : 37

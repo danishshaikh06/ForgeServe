@@ -1,12 +1,6 @@
 ForgeServe Phase 2 Benchmark
 Model: Qwen/Qwen2.5-0.5B-Instruct
 Warmup runs: 2 | Benchmark runs: 5
-[2026-08-06 22:05:49,235] forgeserve.model.runtime - INFO - Initializing Runtime with model: Qwen/Qwen2.5-0.5B-Instruct
-[2026-08-06 22:05:49,235] forgeserve.model.runtime - INFO - ModelLoader initialized successfully for Qwen/Qwen2.5-0.5B-Instruct.
-
->>> Scenario: prompt=4 tokens, generate=50 tokens
-[2026-08-06 22:05:54,232] runner - INFO - Warming up with 2 runs before benchmarking
-[2026-08-06 22:05:58,029] runner - INFO - Warmup complete. Starting 5 benchmark runs.
 
 =================================================================
   BENCHMARK RESULTS
@@ -24,13 +18,8 @@ Peak memory (MB)                     990.7         978.3
 -----------------------------------------------------------------
 Total speedup                         1.15x
 TPOT speedup                          1.17x
-Memory overhead (MB)                 -12.4
+Memory delta (MB)                     -12.4 (memory delta = KV Cache memory − Naive memory)
 =================================================================
-
-
->>> Scenario: prompt=4 tokens, generate=200 tokens
-[2026-08-06 22:06:06,330] runner - INFO - Warming up with 2 runs before benchmarking
-[2026-08-06 22:06:09,768] runner - INFO - Warmup complete. Starting 5 benchmark runs.
 
 =================================================================
   BENCHMARK RESULTS
@@ -48,13 +37,8 @@ Peak memory (MB)                     990.7         978.3
 -----------------------------------------------------------------
 Total speedup                         1.04x
 TPOT speedup                          1.05x
-Memory overhead (MB)                 -12.4
+Memory Delta (MB)                     -12.4
 =================================================================
-
-
->>> Scenario: prompt=17 tokens, generate=50 tokens
-[2026-08-06 22:06:18,676] runner - INFO - Warming up with 2 runs before benchmarking
-[2026-08-06 22:06:22,314] runner - INFO - Warmup complete. Starting 5 benchmark runs.
 
 =================================================================
   BENCHMARK RESULTS
@@ -72,13 +56,8 @@ Peak memory (MB)                    1000.0         987.1
 -----------------------------------------------------------------
 Total speedup                         1.14x
 TPOT speedup                          1.15x
-Memory overhead (MB)                 -12.9
+Memory Delta (MB)                     -12.9
 =================================================================
-
-
->>> Scenario: prompt=17 tokens, generate=200 tokens
-[2026-08-06 22:06:30,548] runner - INFO - Warming up with 2 runs before benchmarking
-[2026-08-06 22:06:33,841] runner - INFO - Warmup complete. Starting 5 benchmark runs.
 
 =================================================================
   BENCHMARK RESULTS
@@ -96,5 +75,5 @@ Peak memory (MB)                    1000.0         987.1
 -----------------------------------------------------------------
 Total speedup                         1.13x
 TPOT speedup                          1.14x
-Memory overhead (MB)                 -12.9
+Memory Delta (MB)                     -12.9
 =================================================================#
