@@ -1,3 +1,21 @@
+"""
+Loads the model and tokenizer from hugging face using a single function load()
+
+Model return type -> PreTrainedModel
+Tokenizer return type -> , PreTrainedTokenizerBase
+
+"""
+
+
+
+
+
+
+
+
+
+
+
 import torch
 from transformers import (
     AutoModelForCausalLM,
