@@ -5,17 +5,6 @@ Model return type -> PreTrainedModel
 Tokenizer return type -> , PreTrainedTokenizerBase
 
 """
-
-
-
-
-
-
-
-
-
-
-
 import torch
 from transformers import (
     AutoModelForCausalLM,
