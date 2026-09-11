@@ -62,6 +62,7 @@ class BlockManager:
 
         # pre-allocate all blocks - this is the only cuda malloc
         # keeps track of all the KVBlock objects that have been created.
+        #_pool is the global pool of physical KV blocks. It is pre-allocated once and is shared by all requests.
         self._pool: list[KVBlock] = [
             KVBlock(
                 block_id= i,

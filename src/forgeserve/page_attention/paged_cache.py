@@ -48,9 +48,17 @@ class PagedKVCache:
         self.block_size = block_size
         self.num_layers = num_layers
 
-        # Block Table: ordered list of physical blocks (Real token index)
-        # Index in list = Logical block index (Aloocated in gpu memory)
+        # Block table: maps logical block index → physical KV block
+        # List index = logical block index
+        # Value = physical block allocated in GPU memory
+        '''block_table = [
+            physical_block_7,
+            physical_block_2,
+            physical_block_9,
+        ]'''
+        #each request has its own logical block table
         self.block_table: list[KVBlock] = list(initial_blocks)
+
 
         #Total tokens written so far
         self.seq_len: int = 0
