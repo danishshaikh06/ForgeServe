@@ -32,7 +32,6 @@ class PagedRuntime(Runtime):
 
     Args:
         model_name:    HuggingFace model identifier.
-        block_manager: Pre-initialized BlockManager with GPU block pool.
         attention:     Attention backend (EAGER or SDPA).
     """
     def __init__(
