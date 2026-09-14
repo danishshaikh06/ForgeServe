@@ -51,7 +51,7 @@ class RequestState:
     """
     All runtime state for one active generation request.
 
-    The scheduler is the sole owner of this object.  No other
+    The scheduler is the sole owner of this object. No other
     component should mutate it directly.
 
     *Parameters
@@ -68,7 +68,7 @@ class RequestState:
     Mutable fields (set by the scheduler during the request lifetime)
     -----------------------------------------------------------------
     input_ids, attention_mask:
-        Tensors on the target device.  ``attention_mask`` is extended
+        Tensors on the target device. ``attention_mask`` is extended
         by one column after every decode step so the model always sees
         the correct full-sequence mask.
     paged_cache:

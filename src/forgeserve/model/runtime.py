@@ -176,7 +176,7 @@ class Runtime:
             attention_mask: Attention mask. Shape: (batch, prompt_len)
 
         Returns:
-            logits: Shape (batch, vocab_size) — logits for next token
+            logits: Shape (batch,seq_len,vocab_size) — logits for next token
             cache: KVCache populated with K/V for all prompt tokens
         """
         logger.debug("Prefill: processing %d prompt token", input_ids.shape[1])
