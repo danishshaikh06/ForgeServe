@@ -510,7 +510,116 @@ class ContinuousBatching:
         request:
             A RUNNING request that has just finished generation.
         """
-        pass
+        blocks_released = request.blocks_used
+
+        self.runtime.free_request(request.request_id)
+
+        request.paged_cache = None
+        request.logits = None
+        request.mark_finished()
+
+        del self._running[request.request_id]
+
+        logger.info(
+            "Request finished: id=%s generated=%d "
+            "finish_reason=%s released_blocks=%d "
+            "running=%d waiting=%d free_blocks=%d",
+            request.request_id,
+            request.generated_tokens,
+            request.finish_reason,
+            blocks_released,
+            self.num_running,
+            self.num_waiting,
+            self.block_manager.num_free_blocks,
+        )
+
+    def eos(self, request:RequestState) -> bool:
+        """
+        Return ``True`` if the last generated token is the EOS token.
+
+        Parameters
+        ----------
+        request:
+            The request to check.  If ``last_token_id`` is ``None``
+            (before any decode step), returns ``False``.
+        """
+        if request.last_token_id is None:
+            return False
+        eos_id = self.runtime.tokenizer.eos_token_id
+        return request.last_token_id == eos_id
+
+    #helpers
+    def _count_prompt_tokens(self, prompt: str) -> int:
+        """
+        Tokenize ``prompt`` and return the token count.
+
+        Used only for the pre-admission block estimate.  The actual
+        tokenization during prefill is done by ``_prefill`` which
+        stores the tensors on the request.
+
+        Parameters
+        ----------
+        prompt:
+            Raw text prompt.
+        """
+
+        encoded = self.runtime.tokenize(text=prompt, system_prompt=None)
+        return int(encoded["input_ids"].shape[1])
+
+    def _blocks_required(self, tokens:int) -> int:
+        """
+        Return the number of KV blocks needed to hold ``tokens`` tokens.
+
+        Uses ceiling division so a partial block is counted as a full one.
+
+        Parameters
+        ----------
+        tokens:
+            Number of tokens to store.
+        """
+        block_size = self.block_manager.block_size
+        return (tokens + block_size - 1) // block_size
+
+    #introspection
+    def snapshot(self) -> dict[str,int]:
+        """
+        Return a point-in-time snapshot of scheduler and pool state.
+
+        Intended for benchmarks, dashboards, and structured logging.
+        All values are consistent with each other (no race conditions
+        because this is single-threaded).
+
+        Returns
+        -------
+        dict with keys:
+            waiting       — requests in the waiting queue
+            running       — requests currently decoding
+            used_blocks   — KV blocks currently allocated
+            free_blocks   — KV blocks available for allocation
+            total_blocks  — sum of used and free (constant)
+        """
+        return{
+            "waiting": self.num_waiting,
+            "running": self.num_running,
+            "used_blocks": self.block_manager.num_used_blocks,
+            "free_blocks": self.block_manager.num_free_blocks,
+            "total_blocks": self.block_manager.num_blocks,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"ContinuousBatchScheduler("
+            f"running={self.num_running}, "
+            f"waiting={self.num_waiting}, "
+            f"free_blocks={self.block_manager.num_free_blocks}/"
+            f"{self.block_manager.num_blocks})"
+        )
+
+        
+
+
+
+
 
 
 
