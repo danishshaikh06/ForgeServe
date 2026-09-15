@@ -140,9 +140,9 @@ class ContinuousBatching:
         return len(self._running)
 
     @property
-    def block_manager(self, ) -> int:
+    def block_manager(self):
         """Convenience accessor for the runtime's block manager."""
-        return self.runtime._require_block_manager()
+        return self.runtime.block_manager
 
     #add request in the waiting queue 
     def add_request(
@@ -286,5 +286,235 @@ class ContinuousBatching:
         """
         prompt_tokens = self._count_prompt_tokens(request.prompt)
         blocks_needed = self._blocks_required(prompt_tokens)
-        return self.block_manager.allocate(blocks_needed)
+        return self.block_manager.can_allocate(blocks_needed)
+
+    #Prefill
+    def _prefill(self,request: RequestState) -> None:
+        """
+        Tokenize the prompt and run the prefill forward pass.
+
+        After this method returns:
+        * ``request.input_ids`` and ``request.attention_mask`` hold
+          the prompt tensors on the correct device.
+        * ``request.paged_cache`` holds the populated ``PagedKVCache``.
+        * ``request.logits`` holds the logits for the first decode step.
+        * ``request.prompt_tokens`` is set.
+
+        The request is not yet marked RUNNING.  That happens in
+        ``admit_requests`` after this method returns successfully.
+
+        Parameters
+        ----------
+        request:
+            The request to prefill.  Must be in WAITING status.
+        """
+        encoded = self.runtime.tokenize(
+            text=request.promt,
+            system_prompt=None,
+        )
+
+        input_ids: torch.Tensor = encoded["input_ids"].to(self.runtime.loader.device)
+        attention_mask: torch.Tensor = encoded["attention_mask"].to(self.runtime.loader.device)
+
+        logits, paged_cache = self.runtime.paged_prefill(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            request_id=request.request_id,
+        )
+
+        request.input_ids = input_ids
+        request.attention_mask = attention_mask
+        request.paged_cache = paged_cache
+        request.logits = logits
+        request.prompt_tokens = input_ids.shape[1]
+
+        logger.debug(
+            "Prefill complete: id=%s prompt_tokens=%d blocks=%d",
+            request.request_id,
+            request.prompt_tokens,
+            request.blocks_used,
+        )
+
+    #step
+    def step(self) -> int:
+        """
+        Execute one full continuous-batching scheduling step.
+
+        The step proceeds in four phases:
+
+        1. **Admit** — move waiting requests to RUNNING if blocks allow.
+        2. **Decode** — advance every running request by exactly one token.
+        3. **Finish** — release blocks for requests that completed this step.
+        4. **Re-admit** — newly freed blocks may allow waiting requests in.
+
+        Phase 4 is the defining property of continuous batching: freed
+        slots are reused *within the same scheduling step*, not deferred
+        to the next one.
+
+        Returns
+        -------
+        int
+            Number of requests that participated in the decode phase.
+            Zero means nothing is running and nothing could be admitted.
+        """
+        self.admit_request()
+
+        if not self._running:
+            return 0
+
+        active = list(self._running.values())
+
+        logger.debug(
+            "Decode step: batch_size=%d free_blocks=%d",
+            len(active),
+            self.block_manager.num_free_blocks,
+        )
+
+        for request in active:
+            self._decode_one(request)
+
+        self._finish_completed_requests()
+
+        # Re-admit immediately: blocks freed above may unblock the queue.
+        self.admit_request()
+
+        return len(active)
+
+    #decode-one-token-at-a-time
+    def _decode_one(self,request: RequestState) -> None:
+        """
+        Advance one request by exactly one decode token.
+
+        Steps
+        -----
+        1. Sample the next token from ``request.logits`` using the
+           injected ``Sampler``.
+        2. Extend ``request.attention_mask`` by one column so the model
+           sees the correct full-sequence positional information.
+        3. Call ``paged_decode_step`` to run the forward pass and update
+           the KV cache.
+        4. Store the new logits and ``last_token_id`` on the request.
+
+        The attention mask extension in step 2 is critical.  Without it
+        the model computes incorrect position ids for all generated tokens,
+        producing garbled output with no visible error.
+
+        Parameters
+        ----------
+        request:
+            A RUNNING request with valid ``logits``, ``attention_mask``,
+            and ``paged_cache``.
+
+        Raises
+        ------
+        RuntimeError
+            If ``logits`` or ``paged_cache`` is ``None``.
+        """
+
+        if request.logits is None:
+            raise RuntimeError(
+                f"Request '{request.request_id}' has no paged cache. "
+                "Was prefill called?"
+            )
+
+        #Sample next token 
+        logits = request.logits[:, -1, :] #(1,vocab_size)
+        next_token = self.sampler.sample(logits) #(1,)
+        next_token_id = int(next_token.item()) # to get the token position 
+        next_token = next_token.unsqueeze(-1) #(batch, seq_len) for forward pass 
+
+        #extendt the attention mask 
+        #the mask must cover the full sequence at every decode step
+        #Passing the original prompt-length mask causes the model to
+        #compute wrong position ids for generated tokens.
+        ## 1 = valid token, 0 = masked/padding token; model attends only to valid positions.
+        # Causal masking additionally prevents each token from attending to future tokens.
+        request.attention_mask = torch.cat(
+            [
+            request.attention_mask,
+            torch.ones(
+            (1,1),
+            dtype= request.attention_mask.dtype,
+            device = request.attention_mask.device,
+                 ),
+            ],
+            dim=-1 
+        )
+
+        # forward pass with paged kv cache 
+        logits, paged_cache = self.runtime.decode_step(
+            token_id=next_token,
+            attention_mask=request.attention_mask,
+            paged_cache = request.paged_cache
+        )
+
+        #request state updation 
+        request.logits = logits
+        request.paged_cache = paged_cache
+        request.last_token_id = next_token_id
+        request.generated_tokens+=1
+
+        logger.debug(
+            "Token decoded: id=%s token=%d generated=%d blocks=%d",
+            request.request_id,
+            next_token_id,
+            request.generated_tokens,
+            request.blocks_used,
+        )
+
+    #comletion
+    def _finish_completed_requests(self) -> int:
+        """
+        Identify and release all requests that finished this step.
+
+        A request is finished when either:
+        * The most recently decoded token is the EOS token, or
+        * ``generated_tokens`` has reached ``max_new_tokens``.
+
+        Blocks are freed immediately so they can be reassigned to
+        waiting requests within the same scheduling step.
+
+        Returns
+        -------
+        int
+            Number of requests finished and released this call.
+        """
+
+        completed = 0 
+
+        for request_id,request in list(self._running.items()):
+            eos_reached = self._is_eos(request)
+            length_reached = (
+                request.generated_tokens>=request.max_new_tokens
+            )
+
+            if not (eos_reached and length_reached):
+                continue
+
+            request.finish_reason = "eos" if eos_reached else "length"
+            self._finish_request(request)
+            completed+=1
+
+    def _finish_request(self, request:RequestState):
+        """
+        Release all KV blocks owned by a completed request and
+        remove it from the running set.
+
+        The ``finally``-style guarantee: blocks are always freed even if
+        the request ended abnormally.  Failure to free blocks here is a
+        permanent GPU memory leak — the pool shrinks with every request
+        and the system eventually deadlocks.
+
+        Parameters
+        ----------
+        request:
+            A RUNNING request that has just finished generation.
+        """
+        pass
+
+
+
+
+
+
 
