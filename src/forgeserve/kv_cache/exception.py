@@ -6,3 +6,6 @@ class KVCacheNotInitializedError(Exception):
 
 class KVCacheShapeMismatchError(Exception):
     """Raised when cache shape is inconsistent with model config."""
+
+class KVCacheOutOfMemoryError(Exception):
+    """Raised when kv cache is out of memory"""

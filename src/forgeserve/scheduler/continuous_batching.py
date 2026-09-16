@@ -58,9 +58,9 @@ import torch
 
 from forgeserve.logger import get_logger
 from forgeserve.model.paged_runtime import PagedRuntime
-from forgeserve.sampler import Sampler
+from forgeserve.sampler.greedy import GreedySampler
 from forgeserve.scheduler.request import RequestState,RequestStatus
-from forgeserve.page_attention.block_manager import BlockManager
+from forgeserve.kv_cache.exception import KVCacheOutOfMemoryError
 if TYPE_CHECKING:
     pass
 
@@ -101,7 +101,7 @@ class ContinuousBatching:
     def __init__(
             self,
             runtime: PagedRuntime,
-            sampler: Sampler,
+            sampler: GreedySampler,
             max_batch_size: int | None = None,
     ) -> None:
         self.runtime = runtime
@@ -211,6 +211,8 @@ class ContinuousBatching:
             self.num_waiting,
         )
 
+        return request
+
     #add request in the running dictionary from waiting queue 
     def admit_request(self) -> int:
         """
@@ -309,7 +311,7 @@ class ContinuousBatching:
             The request to prefill.  Must be in WAITING status.
         """
         encoded = self.runtime.tokenize(
-            text=request.promt,
+            text=request.prompt,
             system_prompt=None,
         )
 
@@ -418,7 +420,7 @@ class ContinuousBatching:
             )
 
         #Sample next token 
-        logits = request.logits[:, -1, :] #(1,vocab_size)
+        logits = request.logits #(1,vocab_size)
         next_token = self.sampler.sample(logits) #(1,)
         next_token_id = int(next_token.item()) # to get the token position 
         next_token = next_token.unsqueeze(-1) #(batch, seq_len) for forward pass 
@@ -440,13 +442,22 @@ class ContinuousBatching:
             ],
             dim=-1 
         )
-
-        # forward pass with paged kv cache 
-        logits, paged_cache = self.runtime.decode_step(
-            token_id=next_token,
-            attention_mask=request.attention_mask,
-            paged_cache = request.paged_cache
-        )
+        try:
+            # forward pass with paged kv cache 
+            logits, paged_cache = self.runtime.paged_decode_step(
+                token_id=next_token,
+                attention_mask=request.attention_mask,
+                paged_cache = request.paged_cache
+            )
+        except KVCacheOutOfMemoryError:
+            logger.warning(
+                "OOM during decode for request '%s' at position %d. "
+                "Finishing with %d tokens. "
+                "Increase num_blocks or reduce concurrency.",
+                request.request_id,
+                request.paged_cache.seq_len,
+                request.generated_tokens,
+            )
 
         #request state updation 
         request.logits = logits
@@ -484,14 +495,15 @@ class ContinuousBatching:
 
         for request_id,request in list(self._running.items()):
             eos_reached = self._is_eos(request)
-            length_reached = (
-                request.generated_tokens>=request.max_new_tokens
-            )
+            length_reached = request.generated_tokens>=request.max_new_tokens
+            oom_reached    = request.finish_reason == "oom"
 
-            if not (eos_reached and length_reached):
+            if not (eos_reached or length_reached or oom_reached):
                 continue
 
-            request.finish_reason = "eos" if eos_reached else "length"
+            if not oom_reached:
+                request.finish_reason = "eos" if eos_reached else "length"
+
             self._finish_request(request)
             completed+=1
 
@@ -533,7 +545,7 @@ class ContinuousBatching:
             self.block_manager.num_free_blocks,
         )
 
-    def eos(self, request:RequestState) -> bool:
+    def _is_eos(self, request:RequestState) -> bool:
         """
         Return ``True`` if the last generated token is the EOS token.
 
