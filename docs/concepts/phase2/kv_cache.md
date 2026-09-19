@@ -585,3 +585,39 @@ This is one of the fundamental optimizations used by modern LLM inference system
 However, the cache consumes GPU memory.
 
 Therefore, once we move from a single request to many concurrent requests, **efficient KV Cache memory management becomes one of the most important problems in LLM serving**.
+
+
+SINGLE KV BLOCK IN THE POOL:
+block_size = 4
+num_layers = 2
+num_heads = 2
+head_dim = 3
+
+KVBlock(block_id=7)
+
+├── K
+│   ├── Layer 0
+│   │   ├── Token 0 → [ ... ]
+│   │   ├── Token 1 → [ ... ]
+│   │   ├── Token 2 → [ ... ]
+│   │   └── Token 3 → [ ... ]
+│   │
+│   └── Layer 1
+│       ├── Token 0 → [ ... ]
+│       ├── Token 1 → [ ... ]
+│       ├── Token 2 → [ ... ]
+│       └── Token 3 → [ ... ]
+│
+└── V
+    ├── Layer 0
+    │   ├── Token 0 → [ ... ]
+    │   ├── Token 1 → [ ... ]
+    │   ├── Token 2 → [ ... ]
+    │   └── Token 3 → [ ... ]
+    │
+    └── Layer 1
+        ├── Token 0 → [ ... ]
+        ├── Token 1 → [ ... ]
+        ├── Token 2 → [ ... ]
+        └── Token 3 → [ ... ]
+
