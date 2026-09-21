@@ -270,6 +270,7 @@ class PagedKVCache:
             for block in self.block_table:
                 filled = block.num_filled
                 if filled == 0:
+
                     continue
                 #shape: [num_layers, num_heads, block_size, head_dim]
                 k_parts.append(block.k_cache[layer_idx, :, :filled, :])
@@ -282,6 +283,57 @@ class PagedKVCache:
             cache.update(k_full, v_full, layer_idx)
 
         return cache
+
+    def gather_padded(
+            self,
+            target_len: int,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Gather all KV blocks into padded contiguous tensors.
+
+        Left-pads with zeros so all requests align to target_len.
+        This allows stacking multiple requests into one batch tensor.
+
+        Args:
+            target_len: Length to pad to. Usually L_max across all requests.
+
+        Returns:
+            k_padded: Shape (num_layers, num_heads, target_len, head_dim)
+            v_padded: Shape (num_layers, num_heads, target_len, head_dim)
+        """
+        #first gather what is unpadded 
+        #Shape: (num_layer, num_heads, seq_len, head_dim)
+        k_parts = []
+        v_parts = []
+
+        for block in self.block_table:
+            filled = block.num_filled
+            if filled == 0:
+                continue
+            k_parts.append(block.k_cache[:, :, :filled, :])
+            v_parts.append(block.v_cache[:, :, :filled, :])
+
+        if not k_parts:
+            #Empty cache return all zeros 
+            shape = (self.num_layers, 1, target_len, k_parts[0].shape[-1])
+            device = self.block_table[0].k_cache.device
+            dtype = self.block_table[0].k_cache.dtype
+            return torch.zeros(shape, device=device, dtype=dtype),\
+                   torch.zeros(shape, device=device, dtype=dtype)
+
+        k_full = torch.cat(k_parts, dim=2) # (num_layers, num_heads, seq_len, head_dim
+        v_full = torch.cat(v_parts, dim=2)
+
+        current_len = k_full.shape[2]
+        pad_len = target_len - current_len
+
+        if pad_len > 0:
+            #left pad with zeros 
+            pad_shape = (k_full.shape[0], k_full.shape[1], pad_len, k_full.shape[3])
+            zeros = torch.zeros(pad_shape, device=k_full.device, dtype=k_full.dtype)
+            k_full = torch.cat([zeros, k_full], dim=2)
+            v_full = torch.cat([zeros, k_full], dim=2)
+        
 
 
 
