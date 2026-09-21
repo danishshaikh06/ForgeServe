@@ -2445,3 +2445,111 @@ Scheduler again
 ```
 
 Once this loop is understood, the code becomes an implementation of the model rather than a collection of unrelated tensor operations.
+
+---------------------------------------------------------------------------------------------------------------------------------------------
+Continuous Batching — Batched Decode Questions
+
+Setup: Two Requests Running Simultaneously
+
+Request A: prompt was 4 tokens, has generated 2 tokens so far
+           total sequence: [tok0, tok1, tok2, tok3, tok4, tok5]
+           seq_len = 6
+
+Request B: prompt was 8 tokens, has generated 5 tokens so far
+           total sequence: [tok0, tok1, tok2, tok3, tok4, tok5, tok6, tok7, tok8, tok9, tok10, tok11, tok12]
+           seq_len = 13
+
+We want to decode the next token for BOTH in one forward pass.
+
+Question 1 — What position is the new token?
+
+For Request A, the new token is position 6 (after 6 existing tokens).
+
+For Request B, the new token is position 13 (after 13 existing tokens).
+
+When we pad the attention mask to L_max=13:
+
+Request A mask (padded): [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]
+                          ← 7 zeros →  ← 6 ones for existing → + 1 for new
+Request B mask (padded): [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+                          ← 13 ones for existing → + 1 for new
+
+HuggingFace computes position_ids by counting non-zero entries in the mask up to each position. So:
+
+Request A: model sees 7 zeros then 7 ones
+           new token position_id = number of ones - 1 = 6  ✅ correct
+           
+Request B: model sees 13 ones
+           new token position_id = 13  ✅ correct
+
+The padding zeros tell the model "these positions do not exist." The model automatically figures out where the new token sits. You do not need to pass position_ids manually — the mask handles it.
+
+Question 2 — Which position in the output KV contains the new token?
+
+After the forward pass, HuggingFace returns updated KV of shape:
+
+(N, num_heads, L_max + 1, head_dim)
+
+The + 1 is the new token we just processed.
+
+For Request A (seq_len=6, padded to 13, new token at position 6):
+
+Output KV positions:
+[pad, pad, pad, pad, pad, pad, pad, tok0, tok1, tok2, tok3, tok4, tok5, NEW]
+  0    1    2    3    4    5    6    7     8     9     10    11    12    13
+
+The new token is always at position -1 (the last position).
+
+This is true for ALL requests regardless of their sequence length. The new token is always appended at the end. So we always extract [:, :, -1, :] — the last position in the sequence dimension.
+
+This is exactly what _extract_last_token_kv already does in your PagedRuntime. The batched version does the same thing but for each request index i separately.
+
+Question 3 — Why allocate blocks BEFORE the forward pass?
+
+Think about what happens if you try to allocate AFTER:
+
+Step 1: Run batched forward pass
+        → success, logits computed
+
+Step 2: Try to write new KV tokens to blocks
+        Request A current block: 15/16 slots filled
+        We write token → block is now FULL
+
+Step 3: Try to write next token for Request A
+        → KVCacheOutOfMemoryError: no free blocks!
+        
+But we already ran the forward pass.
+The logits are computed.
+We cannot "un-run" the GPU operation.
+The token was sampled.
+Now we cannot store its KV anywhere.
+The state is corrupted.
+
+If you allocate BEFORE:
+
+Step 1: Check all requests
+        Request A current block: 15/16 slots → will be full after this step
+        Allocate new block for Request A now
+        If allocation fails → skip this decode step, wait for blocks
+        No GPU work wasted.
+
+Step 2: Run batched forward pass
+        All blocks guaranteed to have space.
+        Write KV → success.
+
+The rule is: never run GPU work you cannot store the result of.
+
+Now Let Me Answer All Three Together Simply
+
+Q1: The attention mask handles position ids automatically.
+    Left-pad shorter sequences with zeros.
+    Model counts the ones to find each token's position.
+    You do not need to do anything extra.
+
+Q2: The new token is always at position -1 in the output KV.
+    For batch index i, extract: kv[i, :, -1, :]
+    Write that into request i's current block.
+
+Q3: Allocate blocks before the forward pass.
+    Reason: if you cannot store the result, do not compute it.
+    Check all requests → allocate where needed → then forward.
