@@ -1,5 +1,3 @@
-Yes. These two functions are basically **one pipeline**:
-
 ```text
 Each request has its own paged KV blocks
               ↓
