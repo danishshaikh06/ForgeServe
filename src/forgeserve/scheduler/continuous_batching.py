@@ -337,10 +337,64 @@ class ContinuousBatching:
             request.blocks_used,
         )
 
+    def _decode_batch(
+        self, 
+        active_request:list[RequestState],
+    ) -> None:
+        """
+        Decode one token for all active requests in a single GPU forward pass.
+
+        This replaces the sequential _decode_one loop.
+        All requests share one forward pass — weights loaded once for all.
+
+        Args:
+            active_requests: All currently RUNNING RequestState objects.
+        """
+        if not active_request:
+            return
+
+        # Sample next token for all requests
+        # we need the last_token_id set on each request before batched_decode_step
+        # Because batched_decode_step reads it to build the token batch tensor
+        # Sample from current logits FIRST, Then run forward for the NEXT step 
+        for req in active_request:
+            logits = req.logits #(1,vocab_size)
+            next_token = self.sampler.sample(logits) # (1,)
+            req.last_token_id = int(next_token.item())
+
+        try:
+            results = self.runtime.batched_decode_step(active_request)
+        except KVCacheOutOfMemoryError as e:
+            logger.warning(
+                "OOM during batched decode: %s. "
+                "Finishing affected requests.", e
+            )
+
+            #mark all req as oom-teminated
+            for req in active_request:
+                req.finish_reason = "oom"
+                req.max_new_tokens = req.generated_tokens
+            return
+
+        # Update each request with its results 
+        for req, (logits,paged_cache) in zip(active_request, results):
+            req.logits = logits
+            req.paged_cache = paged_cache
+            req.generated_tokens+=1
+
+            logger.debug(
+                "Batched token decoded: id=%s token=%d generated=%d blocks=%d",
+                req.request_id,
+                req.last_token_id,
+                req.generated_tokens,
+                req.blocks_used,
+            )
+
     #step
     def step(self) -> int:
         """
-        Execute one full continuous-batching scheduling step.
+        Execute one continuous-batching scheduling step.
+        Now uses batched forward pass instead of sequential loop.
 
         The step proceeds in four phases:
 
@@ -372,8 +426,11 @@ class ContinuousBatching:
             self.block_manager.num_free_blocks,
         )
 
-        for request in active:
-            self._decode_one(request)
+        # ONE call handles all requests in one GPU forward pass
+        self._decode_batch(active)
+
+        #for request in active:
+            #self._decode_one(request)
 
         self._finish_completed_requests()
 

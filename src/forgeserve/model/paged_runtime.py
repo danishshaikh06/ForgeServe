@@ -23,6 +23,7 @@ from forgeserve.model.types import AttentionImplementation
 from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
 from forgeserve.page_attention.paged_cache import PagedKVCache
+from transformers.cache_utils import DynamicCache
 
 logger = get_logger(__name__)
 
@@ -244,6 +245,151 @@ class PagedRuntime(Runtime):
         logits = output.logits[:, -1, :]
 
         return logits, paged_cache
+
+    def batched_decode_step(
+            self,
+            requests: list,
+    ) -> list[tuple[torch.Tensor, PagedKVCache]]:
+        """
+        Decode one token for ALL requests in a single forward pass.
+
+        Steps:
+            1. Pre-allocate blocks for any request whose current block is full
+            2. Compute L_max across all requests
+            3. Gather and pad each request's KV cache to L_max
+            4. Build padded attention masks
+            5. Stack tokens, KV caches, masks into batch tensors
+            6. ONE forward pass
+            7. Distribute logits back to requests
+            8. Extract new token KV (position -1) for each request
+            9. Write to each request's current block
+
+        Args:
+            requests: All currently running RequestState objects.
+
+        Returns:
+            List of (logits, updated_paged_cache) per request.
+            Order matches input requests order.
+        """
+        self._require_block_manager()
+    
+        #pre-allocate blocks where needed
+        #it must happen before forward pass
+        #if we cannot allocate we cannot store teh result 
+        for req in requests:
+            current_block = req.paged_cache.block_table[-1]
+            if current_block.is_full:
+                if not self.block_manager.can_allocate(1):
+                    raise KVCacheOutOfMemoryError(
+                        f"Block pool exhausted before batched decode step. "
+                        f"Request '{req.request_id}' needs a new block but "
+                        f"none are available. Reduce batch size or increase pool."
+                    )
+                new_blocks = self.block_manager.allocate(req.request_id, 1)
+                req.paged_cache.append_block(new_blocks[0])
+                logger.debug(
+                "Pre-allocated block for request '%s' before batched step",
+                req.request_id,
+                )
+
+        #compute L_max 
+        #L_max = longest current sequence across all request
+        #all kv caches and mask will be padded to this length 
+        L_max = max(req.paged_cache.seq_len for req in requests)
+
+        #Gather KV Caches and build masks
+        #Build these in parallel so we can iterate requests only once 
+        batch_k = []
+        batch_v = []
+        batch_masks = []
+
+        device = self.loader.device
+        
+        for req in requests:
+            seq_len = req.paged_cache.seq_len
+
+            #Gather and pad kv to L_max
+            k_padded, v_padded = req.paged_cache.gather_padded(L_max)
+            batch_k.append(k_padded)
+            batch_v.append(v_padded)
+
+            # Build attention masl: L_max zeros(padding) + seq_len ones(real) + 1 (new token)
+            # Total lenght: L_max+1
+            pad_len = L_max - seq_len
+            mask = torch.cat([
+                torch.zeros(pad_len,dtype=torch.long, device=device),
+                torch.ones(seq_len + 1, dtype=torch.long, device=device),
+            ]).unsqueeze(0) # (1,L_max + 1)
+            batch_masks.append(mask)
+
+        # stack into batch tensor 
+        # batch_k_stacked: (N, num_layers, num_heads, l_max, head_dim)
+        batch_k_stacked = torch.stack(batch_k, dim=0)
+        batch_v_stacked = torch.stack(batch_v, dim=0)
+        attention_mask = torch.cat(batch_masks, dim=0) # (N, L_max_1)
+
+        # Collect last token from each request
+        # next_token_id is set during sampling in scheduler 
+        token_ids = torch.tensor(
+            [[req.last_token_id] for req in requests],
+            dtype=torch.long,
+            device=device,
+        )  # (N,1)
+
+        #Build DynamicCache from stacked kv tensors 
+        # DynamicCache expects per-layer (N, num_heads, seq_len, head_dim)
+        past_kv = DynamicCache()
+        num_layers = batch_k.stacked.shape[1]
+
+        for layer_idx in range(num_layers):
+            k_layer = batch_k_stacked[:, layer_idx, :, :, :]
+            v_layer = batch_v_stacked[:, layer_idx, :, :, :]
+            past_kv.update(k_layer,v_layer,layer_idx)
+
+        # one forward pass for all request 
+        output = self.forward(
+            input_ids=token_ids, #(N,1)
+            attention_mask=attention_mask, #(N,L_max)
+            past_key_values = past_kv,
+            use_cache = True,
+        )
+
+        assert output.logits is not None
+        assert output.past_key_values is not None
+
+        # logits shape:(N,1,vocab_size) -> squeeze to (N,vocab_size)
+        all_logits = output.logits[:,-1,:] # (N, vocab_size)
+
+        # Distribute the result
+        results = []
+
+        for i,req in enumerate(requests):
+            logits_i = all_logits[i:i+1] #(1,Vocab_size)
+
+            #Extract new token KV from the output
+            # output.past_key_values.key_cache[layer]: (N, num_heads, L_max +1, head_dim)
+            # New token is always at position -1
+            # we need request i's KV at that position 
+            for layer_idx in range(num_layers):
+                k_out = output.past_key_values.key_cache[layer_idx]
+                v_out = output.past_key_values.value_cache[layer_idx]
+
+                #Extract request i, last position
+                #shape(num_heads,head_dim)
+                k_new = k_out[i, :, -1, :]
+                v_new = v_out[i, :, -1, :]
+
+                #write to request i's current block 
+                current_block = req.paged_cache.block_table[-1]
+                current_block.write_token(layer_idx,k_new,v_new)
+
+            #increment fill pointer once after all layers
+            current_block.increment_filled()
+            req.paged_cache.seq_len+=1
+
+            results.append((logits_i, req.paged_cache))
+
+        return results        
 
     def free_request(
             self,
