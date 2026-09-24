@@ -1,5 +1,3 @@
-Yes. These two functions are basically **one pipeline**:
-
 ```text
 Each request has its own paged KV blocks
               ↓
@@ -107,7 +105,7 @@ block2.num_filled = 2
 
 The `_` positions aren't valid KV yet.
 
-Your code:
+The code:
 
 ```python
 for block in self.block_table:
@@ -171,7 +169,7 @@ K₂ ∈ R^(L × H × 2 × D)
 
 # Step 2: Concatenate the blocks
 
-You do:
+do:
 
 ```python
 k_full = torch.cat(k_parts, dim=2)
@@ -1095,4 +1093,657 @@ split by request
   │
   └── Request C → write into C's block
 ```
+
+
+Let's use the smallest useful example.
+
+---
+
+# 1. Our example
+
+Suppose we have **2 requests**:
+
+```text
+Request A → 3 cached tokens
+Request B → 5 cached tokens
+```
+
+And the model has:
+
+```text
+2 layers
+2 heads
+head_dim = 4
+```
+
+So:
+
+$$
+N=2,\quad L=2,\quad H=2,\quad D=4
+$$
+
+The sequence lengths are:
+
+$$
+S_A=3
+$$
+
+$$
+S_B=5
+$$
+
+Therefore:
+
+$$
+L_{\max}=\max(3,5)=5
+$$
+
+---
+
+# 2. What does each request's KV look like?
+
+For Request A:
+
+```python
+k_A.shape
+```
+
+is:
+
+```text
+(2, 2, 3, 4)
+```
+
+Mathematically:
+
+$$
+K_A\in\mathbb{R}^{2\times2\times3\times4}
+$$
+
+Meaning:
+
+```text
+layers       = 2
+heads        = 2
+tokens       = 3
+head_dim     = 4
+```
+
+Request B:
+
+```text
+(2, 2, 5, 4)
+```
+
+or:
+
+$$
+K_B\in\mathbb{R}^{2\times2\times5\times4}
+$$
+
+---
+
+# 3. Why can't we stack them yet?
+
+We want:
+
+```python
+torch.stack([k_A, k_B])
+```
+
+But:
+
+```text
+A → (2, 2, 3, 4)
+B → (2, 2, 5, 4)
+```
+
+They don't have the same shape.
+
+Mathematically:
+
+$$
+3\neq5
+$$
+
+So we first make both sequence lengths equal.
+
+---
+
+# 4. `gather_padded()`
+
+For A:
+
+```text
+A = [A A A]
+```
+
+We need length 5:
+
+```text
+[PAD PAD A A A]
+```
+
+Mathematically:
+
+$$
+\tilde K_A =
+[0,0,K_A]
+$$
+
+and therefore:
+
+$$
+\tilde K_A
+\in
+\mathbb{R}^{2\times2\times5\times4}
+$$
+
+For B:
+
+```text
+B = [B B B B B]
+```
+
+Already length 5:
+
+$$
+\tilde K_B
+\in
+\mathbb{R}^{2\times2\times5\times4}
+$$
+
+Now both have identical shapes.
+
+---
+
+# 5. Now `torch.stack`
+
+This is where `stack` makes sense.
+
+```python
+batch_k_stacked = torch.stack(
+    [k_A_padded, k_B_padded],
+    dim=0
+)
+```
+
+Before:
+
+```text
+A → (2, 2, 5, 4)
+B → (2, 2, 5, 4)
+```
+
+After:
+
+```text
+(2, 2, 2, 5, 4)
+ ↑
+ batch dimension
+```
+
+Mathematically:
+
+$$
+K_{\text{batch}}
+\in
+\mathbb{R}^{N\times L\times H\times L_{\max}\times D}
+$$
+
+So:
+
+$$
+K_{\text{batch}}
+\in
+\mathbb{R}^{2\times2\times2\times5\times4}
+$$
+
+---
+
+# 6. Why the `layer_idx` loop?
+
+This is the part you were asking about earlier.
+
+Our tensor is:
+
+$$
+K_{\text{batch}}
+\in
+\mathbb{R}^{2\times2\times2\times5\times4}
+$$
+
+Dimensions:
+
+```text
+             N    L    H    S    D
+             ↓    ↓    ↓    ↓    ↓
+shape =     (2,   2,   2,   5,   4)
+                  ↑
+                layers
+```
+
+`DynamicCache.update()` wants **one layer at a time**.
+
+So:
+
+```python
+for layer_idx in range(num_layers):
+```
+
+### `layer_idx = 0`
+
+```python
+k_layer = batch_k_stacked[:, 0, :, :, :]
+```
+
+Mathematically:
+
+$$
+K_{\text{batch}}[:,0,:,:,:]
+$$
+
+removes the layer dimension:
+
+$$
+\mathbb{R}^{2\times2\times5\times4}
+$$
+
+That's:
+
+```text
+(batch, heads, sequence, head_dim)
+```
+
+Then:
+
+```python
+past_kv.update(k_layer, v_layer, 0)
+```
+
+means:
+
+$$
+\text{Cache}[0]\leftarrow K_{\text{batch}}[:,0,:,:,:]
+$$
+
+---
+
+### `layer_idx = 1`
+
+Same thing:
+
+$$
+\text{Cache}[1]
+\leftarrow
+K_{\text{batch}}[:,1,:,:,:]
+$$
+
+So the loop is literally:
+
+$$
+\boxed{
+\text{Cache}[l]
+=
+K_{\text{batch}}[:,l,:,:,:]
+}
+$$
+
+for:
+
+$$
+l=0,1,\ldots,L-1
+$$
+
+That's all the loop is doing.
+
+---
+
+# 7. Now the model receives one new token
+
+We have:
+
+```python
+token_ids.shape = (2, 1)
+```
+
+Mathematically:
+
+$$
+X\in\mathbb{R}^{N\times1}
+$$
+
+For example:
+
+```text
+Request A → token 17
+Request B → token 42
+```
+
+So:
+
+```text
+[[17],
+ [42]]
+```
+
+---
+
+# 8. Why is the attention mask `(N, L_max + 1)`?
+
+This is a very important point.
+
+Before the new token:
+
+```text
+A → [PAD PAD A A A]
+B → [B B B B B]
+```
+
+We're now processing a new token.
+
+Therefore:
+
+```text
+A → [PAD PAD A A A NEW]
+B → [B B B B B NEW]
+```
+
+So length is:
+
+$$
+L_{\max}+1=5+1=6
+$$
+
+Therefore:
+
+$$
+M\in\mathbb{R}^{N\times(L_{\max}+1)}
+$$
+
+which is:
+
+$$
+M\in\mathbb{R}^{2\times6}
+$$
+
+Specifically:
+
+```text
+A → [0 0 1 1 1 1]
+B → [1 1 1 1 1 1]
+```
+
+---
+
+# 9. The forward pass
+
+Now everything is aligned:
+
+```text
+input_ids:
+(2, 1)
+
+KV:
+per layer → (2, 2, 5, 4)
+
+mask:
+(2, 6)
+```
+
+We run:
+
+```python
+output = self.forward(...)
+```
+
+**one time**.
+
+Instead of:
+
+```text
+A → model
+B → model
+```
+
+we do:
+
+```text
+A ─┐
+   ├──→ MODEL → results
+B ─┘
+```
+
+---
+
+# 10. What new KV comes out?
+
+The model has processed:
+
+```text
+A → NEW
+B → NEW
+```
+
+So each layer produces new KV for that new token.
+
+Conceptually:
+
+$$
+K_{\text{new}}
+\in
+\mathbb{R}^{N\times H\times1\times D}
+$$
+
+For our example:
+
+$$
+K_{\text{new}}
+\in
+\mathbb{R}^{2\times2\times1\times4}
+$$
+
+We only need the final position:
+
+```python
+k_new = k_out[i, :, -1, :]
+```
+
+Mathematically:
+
+$$
+K_{\text{new}}^{(i)}
+=
+K_{\text{out}}[i,:,-1,:]
+$$
+
+giving:
+
+$$
+\mathbb{R}^{H\times D}
+$$
+
+or:
+
+```text
+(2, 4)
+```
+
+---
+
+# 11. Put it back into the paged cache
+
+Suppose A's cache originally was:
+
+```text
+[A B C]
+```
+
+After generating a token:
+
+```text
+[A B C NEW]
+```
+
+So:
+
+```python
+current_block.write_token(...)
+```
+
+stores:
+
+$$
+K_{\text{new}}^{A}
+\rightarrow
+\text{A's current block}
+$$
+
+Then:
+
+```python
+seq_len += 1
+```
+
+means:
+
+$$
+S_A\leftarrow S_A+1
+$$
+
+So:
+
+$$
+3\rightarrow4
+$$
+
+Likewise B:
+
+$$
+5\rightarrow6
+$$
+
+---
+
+# The entire mathematical flow
+
+This is the part I want you to remember:
+
+### Initially
+
+$$
+K_i\in
+\mathbb{R}^{L\times H\times S_i\times D}
+$$
+
+Different requests have different \(S_i\).
+
+### Gather + pad
+
+$$
+K_i
+\rightarrow
+\tilde K_i
+\in
+\mathbb{R}^{L\times H\times L_{\max}\times D}
+$$
+
+### Stack
+
+$$
+\{\tilde K_i\}_{i=1}^{N}
+\rightarrow
+K_{\text{batch}}
+\in
+\mathbb{R}^{N\times L\times H\times L_{\max}\times D}
+$$
+
+### Split by layer
+
+$$
+K_{\text{batch}}[:,l,:,:,:]
+\in
+\mathbb{R}^{N\times H\times L_{\max}\times D}
+$$
+
+and:
+
+$$
+\text{Cache}[l]
+\leftarrow
+K_{\text{batch}}[:,l,:,:,:]
+$$
+
+### Decode
+
+$$
+X\in\mathbb{R}^{N\times1}
+$$
+
+### New KV
+
+$$
+K_{\text{new}}
+\in
+\mathbb{R}^{N\times H\times1\times D}
+$$
+
+### Write back
+
+$$
+K_{\text{new}}^{(i)}
+\rightarrow
+\text{paged cache of request }i
+$$
+
+and:
+
+$$
+S_i\leftarrow S_i+1
+$$
+
+---
+
+# The easiest mental picture
+
+Don't think about all the tensors initially. Think about **moving data in two directions**:
+
+```text
+             BEFORE MODEL
+                  ↓
+
+Request A ──┐
+            │
+Request B ──┼──→ gather → pad → stack → model
+            │
+Request C ──┘
+
+
+             AFTER MODEL
+                  ↓
+
+              new KV
+                 │
+        ┌────────┼────────┐
+        ↓        ↓        ↓
+     Request A Request B Request C
+        │        │        │
+        ↓        ↓        ↓
+      blocks   blocks   blocks
+```
+
+So the purpose of `gather_padded()` is **not to run the model**.
+
+Its job is simply:
+
+$$
+\boxed{\text{paged KV} \rightarrow \text{regular batched KV}}
+$$
+
+And the end of `batched_decode_step()` does the reverse:
+
+$$
+\boxed{\text{new batched KV} \rightarrow \text{paged KV}}
+$$
+
 
