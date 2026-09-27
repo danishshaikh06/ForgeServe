@@ -339,7 +339,7 @@ class PagedRuntime(Runtime):
         #Build DynamicCache from stacked kv tensors 
         # DynamicCache expects per-layer (N, num_heads, seq_len, head_dim)
         past_kv = DynamicCache()
-        num_layers = batch_k.stacked.shape[1]
+        num_layers = batch_k_stacked.shape[1]
 
         for layer_idx in range(num_layers):
             k_layer = batch_k_stacked[:, layer_idx, :, :, :]
@@ -371,8 +371,7 @@ class PagedRuntime(Runtime):
             # New token is always at position -1
             # we need request i's KV at that position 
             for layer_idx in range(num_layers):
-                k_out = output.past_key_values.key_cache[layer_idx]
-                v_out = output.past_key_values.value_cache[layer_idx]
+                k_out,v_out = output.past_key_values[layer_idx]
 
                 #Extract request i, last position
                 #shape(num_heads,head_dim)

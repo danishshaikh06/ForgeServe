@@ -66,7 +66,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-class ContinuousBatching:
+class ContinuousBatchScheduler:
     """
     Iteration-level continuous-batching scheduler.
 
@@ -429,7 +429,7 @@ class ContinuousBatching:
         # ONE call handles all requests in one GPU forward pass
         self._decode_batch(active)
 
-        #for request in active:
+        #for request in active: ->>>>>> used for sequentiaal loop
             #self._decode_one(request)
 
         self._finish_completed_requests()
@@ -439,7 +439,7 @@ class ContinuousBatching:
 
         return len(active)
 
-    #decode-one-token-at-a-time
+    #decode-one-token-at-a-time -> Old decode method above _decode_batch() is the new one 
     def _decode_one(self,request: RequestState) -> None:
         """
         Advance one request by exactly one decode token.
@@ -553,7 +553,7 @@ class ContinuousBatching:
         for request_id,request in list(self._running.items()):
             eos_reached = self._is_eos(request)
             length_reached = request.generated_tokens>=request.max_new_tokens
-            oom_reached    = request.finish_reason == "oom"
+            oom_reached = request.finish_reason == "oom"
 
             if not (eos_reached or length_reached or oom_reached):
                 continue
@@ -563,6 +563,8 @@ class ContinuousBatching:
 
             self._finish_request(request)
             completed+=1
+
+        return completed
 
     def _finish_request(self, request:RequestState):
         """
