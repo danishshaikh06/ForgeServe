@@ -1,72 +1,302 @@
-# Phase 3 Concept: PagedAttention & Dynamic Memory Management
+# Paged KV Cache & PagedAttention — Complete Notes & Concepts
 
-## Overview
+## 1. Big Picture
 
-In traditional LLM inference engines (such as naive PyTorch implementations), memory management for Key-Value (KV) caching relies on **contiguous pre-allocation**. When a sequence starts generating, memory is allocated assuming the maximum possible context length (e.g. 2048 or 4096 tokens). 
+The primary challenge in high-throughput LLM inference is:
 
-This leads to massive **memory fragmentation** and **waste**:
-* **Internal Fragmentation**: Reserved slots for tokens that are never actually generated.
-* **External Fragmentation**: Virtual memory chunks of varying sizes allocated and deallocated as requests complete.
-* **Reservation Waste**: Pre-allocating maximum sequence memory limits the batch size severely.
+> **How do we store and reuse the Key-Value (KV) cache efficiently during LLM inference?**
 
-**PagedAttention** solves this problem by borrowing concepts from operating system virtual memory management (paging).
-
----
-
-## Key Principles of PagedAttention
-
-### 1. Logical vs. Physical Memory Blocks
-
-Instead of storing KV cache vectors contiguously in memory, PagedAttention divides the KV cache into fixed-size **blocks** (e.g., 16 tokens per block).
+The Paged KV Cache system is organized into three core components:
 
 ```text
-Logical KV Cache (Sequence 1):
-[ Block 0 (Tokens 0-15) ] -> [ Block 1 (Tokens 16-31) ] -> [ Block 2 (Tokens 32-47) ]
+KVBlock
+   ↓
+actual KV-cache storage
 
-Physical GPU Memory Blocks:
-[ Phys Block 42 ]   [ Phys Block 7 ]   [ Phys Block 105 ]   [ Phys Block 12 ]
+BlockManager
+   ↓
+manages/allocates the KV blocks
+
+PagedKVCache
+   ↓
+manages the blocks for one request and writes/gathers KV data
 ```
 
-* **Logical Blocks**: Sequential blocks of KV tensors for a specific request.
-* **Physical Blocks**: Non-contiguous slots allocated dynamically on the GPU memory pool.
-
-### 2. Block Tables
-
-Each sequence maintains a **Block Table** that maps its logical blocks to physical GPU blocks:
-
-| Logical Block Index | Physical Block ID | Status |
-| :--- | :--- | :--- |
-| Block 0 | Physical Block 14 | Filled |
-| Block 1 | Physical Block 89 | Filled |
-| Block 2 | Physical Block 3 | Active (Tokens 32-38 populated) |
-
-When a sequence generates a new token that exceeds its current physical block capacity, the engine allocates a single new physical block from the free memory pool.
-
----
-
-## Memory Efficiency Comparison
+### Mental Model & Core Responsibilities:
 
 ```text
-Static Contiguous Cache:
-[ Token 0..15 | Token 16..31 | Unused (Allocated to Max Context) ......... ]
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                                             80%+ Wasted
-
-Paged KV Cache:
-[ Phys Block 14 ] -> [ Phys Block 89 ] -> [ Phys Block 3 (Only current block allocated) ]
-                                          Zero wasted pre-allocated memory!
+KVBlock      → "What is the storage?"
+BlockManager → "Who gets the storage?"
+PagedKVCache → "How do I use the storage for this request?"
 ```
 
 ---
 
-## Benefits of PagedAttention
+## 2. What is the KV Cache?
 
-1. **Near-Zero Memory Waste**: Memory is allocated incrementally block by block. Unused capacity is at most `Block Size - 1` tokens per sequence.
-2. **Increased Batch Size**: Up to 2x - 4x higher throughput by packing significantly more concurrent sequences into GPU memory.
-3. **Flexible Copy-on-Write Sharing**: Enables fast parallel sampling (beam search, parallel decoding) where multiple sequences share the exact same prompt prefix physical blocks until they diverge.
+During Transformer attention, every layer produces three primary projection vectors:
+* **Query (Q)**
+* **Key (K)**
+* **Value (V)**
+
+For autoregressive text generation, we do not want to recompute the Key and Value vectors for all previous tokens every time we generate a single new token.
+
+Instead, we **cache K and V** from previous tokens.
+
+### Example Sequence:
+Input sequence:
+```text
+T0 T1 T2 T3
+```
+
+After processing them through the model, we store:
+```text
+Layer 0 → K/V for T0 T1 T2 T3
+Layer 1 → K/V for T0 T1 T2 T3
+Layer 2 → K/V for T0 T1 T2 T3
+...
+```
+
+When a new token `T4` arrives, the model reuses `K/V for T0 T1 T2 T3` instead of recomputing them from scratch.
 
 ---
 
-## Summary
+## 3. Why Do We Store KV for Every Layer?
 
-PagedAttention decouples the logical sequence representation from physical GPU memory placement. It is the cornerstone for high-throughput LLM serving.
+A common misconception is: *"The last layer contains the most information, so why not just store the last layer's KV?"*
+
+The answer is: **Each Transformer attention layer operates independently and requires its own historical K/V data.**
+
+Suppose a model has 3 layers:
+```text
+Layer 0 → K0, V0
+Layer 1 → K1, V1
+Layer 2 → K2, V2
+```
+
+When token `T4` is processed:
+1. `T4` enters **Layer 0** $\rightarrow$ Layer 0 requires previous `K0, V0`.
+2. `T4` enters **Layer 1** $\rightarrow$ Layer 1 requires previous `K1, V1`.
+3. `T4` enters **Layer 2** $\rightarrow$ Layer 2 requires previous `K2, V2`.
+
+> **Key Takeaway:** The last layer's K/V cannot replace earlier layers' K/V. Each layer has its own attention operation and must maintain its own K/V cache history.
+
+---
+
+## 4. Physical Structure of a `KVBlock`
+
+One physical `KVBlock` represents **one physical piece of KV-cache memory**.
+
+A single physical block contains Key and Value data for **all Transformer layers** for a fixed chunk of token positions (`block_size`).
+
+```text
+Block 7
+│
+├── Layer 0
+│    ├── K → 16 tokens
+│    └── V → 16 tokens
+│
+├── Layer 1
+│    ├── K → 16 tokens
+│    └── V → 16 tokens
+│
+├── Layer 2
+│    ├── K → 16 tokens
+│    └── V → 16 tokens
+│
+└── Layer 3
+     ├── K → 16 tokens
+     └── V → 16 tokens
+```
+
+> **Key Rule:** A block represents a chunk of tokens, and for that chunk it stores K/V data for every Transformer layer.
+
+For `block_size = 16`:
+* **Block 0** $\rightarrow$ tokens 0–15, for **ALL** layers
+* **Block 1** $\rightarrow$ tokens 16–31, for **ALL** layers
+* **Block 2** $\rightarrow$ tokens 32–47, for **ALL** layers
+
+---
+
+## 5. Tensor Shapes within a `KVBlock`
+
+For a configuration of:
+```python
+num_layers = 4
+num_heads  = 8
+block_size = 16
+head_dim   = 64
+```
+
+The tensor shapes for a single physical block are:
+```python
+K_shape = (num_layers, num_heads, block_size, head_dim) # (4, 8, 16, 64)
+V_shape = (num_layers, num_heads, block_size, head_dim) # (4, 8, 16, 64)
+```
+
+Dimension Breakdown:
+* `num_layers` (4): Total number of Transformer layers.
+* `num_heads` (8): Total Key-Value attention heads.
+* `block_size` (16): Total token capacity inside this physical block.
+* `head_dim` (64): Dimension size of each attention head.
+
+---
+
+## 6. What is `block_size` and `num_filled`?
+
+### `block_size`
+Defines **how many token positions one physical block can hold**.
+
+For `block_size = 4`:
+```text
+Block 3
+┌────┬────┬────┬────┐
+│ T0 │ T1 │ T2 │ T3 │
+└────┴────┴────┴────┘
+```
+
+### `num_filled`
+Tracks **how many token positions in a specific block are currently populated**.
+
+Progression example for `block_size = 4`:
+```text
+Initially:     [   ][   ][   ][   ] -> num_filled = 0
+After T4:      [T4 ][   ][   ][   ] -> num_filled = 1
+After T5:      [T4 ][T5 ][   ][   ] -> num_filled = 2
+After T6 & T7: [T4 ][T5 ][T6 ][T7 ] -> num_filled = 4 (Block FULL)
+```
+
+---
+
+## 7. Pre-Allocation & Block Tracking (`_pool`, `_free_stack`, `_owned`)
+
+Blocks are created **before a request's prefill phase**. When `BlockManager` initializes, it pre-allocates all physical GPU memory tensors.
+
+### Tracking Structures:
+1. **`_pool`**: Keeps references to all physical `KVBlock` objects created in GPU memory.
+   ```text
+   _pool = [Block 0, Block 1, Block 2, Block 3, Block 4]
+   ```
+2. **`_free_stack`**: Tracks which block IDs are currently available for allocation.
+   ```text
+   _free_stack = [0, 1, 2, 3, 4]  # Stack push/pop operates in O(1) time
+   ```
+3. **`_owned`**: Maps request IDs to their assigned physical block IDs.
+   ```python
+   _owned = {
+       "request_A": [4, 3],
+       "request_B": [1]
+   }
+   ```
+
+> **Creating a block = allocating its GPU KV memory up-front.**
+
+---
+
+## 8. Complete Request Lifecycle (Prefill to Decode)
+
+```text
+                         USER TEXT
+                            │
+                            ↓
+                        Tokenizer
+                            │
+                            ↓
+                   [T0 T1 T2 T3 T4]
+                            │
+                            ↓
+                  Know sequence length (5)
+                            │
+                            ↓
+                 Calculate blocks needed (ceil(5/4) = 2 blocks)
+                            │
+                            ↓
+                    BlockManager
+                            │
+                     allocate blocks
+                            │
+             ┌──────────────┴──────────────┐
+             ↓                             ↓
+         KVBlock                         KVBlock
+         Block 4                         Block 3
+         (EMPTY)                         (EMPTY)
+             │                             │
+             └──────────────┬──────────────┘
+                            ↓
+                         PREFILL
+                            │
+                            ↓
+                     Transformer
+                            │
+          ┌─────────────────┼────────────────┐
+          ↓                 ↓                ↓
+       Layer 0           Layer 1          Layer 2
+          │                 │                │
+        K/V               K/V              K/V
+          │                 │                │
+          └─────────────────┼────────────────┘
+                            ↓
+                    past_key_values
+                            │
+                            ↓
+                       write_token()
+                            │
+                            ↓
+                     Physical blocks
+                            │
+             ┌──────────────┴──────────────┐
+             ↓                             ↓
+          Block 4                        Block 3
+       T0 T1 T2 T3                         T4
+                            │
+                            ↓
+                         DECODE
+                            │
+                       New token T5
+                            │
+                            ↓
+                  Reuse previous KV + compute new K/V
+                            │
+                            ↓
+                       write_token()
+                            │
+                            ↓
+                       Block 3
+                    T4 T5 T6 ...
+```
+
+---
+
+## 9. Core Mental Model Summary
+
+```text
+                 KV CACHE SYSTEM
+
+KVBlock
+   │
+   │  "I am the actual physical GPU memory."
+   ↓
+┌───────────────────────────────┐
+│ Layer 0 → K/V                 │
+│ Layer 1 → K/V                 │
+│ Layer 2 → K/V                 │
+│ ...                           │
+│ Layer N → K/V                 │
+│ for block_size tokens         │
+└───────────────────────────────┘
+
+BlockManager
+   │
+   │ "I manage all physical blocks on the device."
+   ↓
+[Block 0][Block 1][Block 2][Block 3]...
+
+PagedKVCache
+   │
+   │ "I manage block mappings and KV reads/writes for Request A."
+   ↓
+Request A → [Block 4, Block 3, Block 2]
+```
+
+### The Golden Rule:
+> **`KVBlock` provides physical KV storage, `BlockManager` manages and allocates those physical blocks across requests, and `PagedKVCache` maps a request's logical token sequence onto those blocks while handling per-layer K/V reads and writes.**
