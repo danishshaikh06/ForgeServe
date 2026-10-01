@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 import torch
-
-# Allow imports from the repository root when running this file directly.
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "src"))
+from timerrr import (
+    get_peak_memory_mb,
+    reset_peak_memory,
+)
 
 from forgeserve.engine.config import GenerationConfig
 from forgeserve.engine.paged_generation import PagedGenerationEngine
@@ -16,11 +16,9 @@ from forgeserve.model.types import AttentionImplementation
 from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.sampler.greedy import GreedySampler
 
-from timerrr import (
-    get_peak_memory_mb,
-    reset_peak_memory,
-)
-
+# Allow imports from the repository root when running this file directly.
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "src"))
 
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 

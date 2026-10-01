@@ -39,10 +39,10 @@ import torch
 
 from forgeserve.engine.config import GenerationConfig
 from forgeserve.engine.paged_generation import PagedGenerationEngine
-from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.logger import get_logger
 from forgeserve.model.paged_runtime import PagedRuntime
 from forgeserve.model.types import AttentionImplementation
+from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.sampler.greedy import GreedySampler
 from forgeserve.scheduler.continuous_batching import ContinuousBatchScheduler
 from forgeserve.scheduler.request import RequestState
@@ -263,7 +263,7 @@ def print_comparison(seq: ScenarioResult, batched: ScenarioResult) -> None:
     wall_gain    = seq.total_wall_ms        / max(batched.total_wall_ms, 0.001)
 
     print(f"\n{'=' * 70}")
-    print(f"  COMPARISON  Sequential  →  Batched Forward")
+    print("  COMPARISON  Sequential  →  Batched Forward")
     print(f"{'=' * 70}")
     print(f"{'Metric':<30} {'Sequential':>16} {'Batched':>16}")
     print(f"{'-' * 70}")
@@ -289,14 +289,14 @@ def print_comparison(seq: ScenarioResult, batched: ScenarioResult) -> None:
         print(f"     Weight loading cost shared across {batched.avg_batch_size:.1f} requests/step")
     elif tps_gain >= 1.5:
         print(f"  ✅ Moderate batching gain: {tps_gain:.2f}x")
-        print(f"     Partial compute overlap. Try larger batch or longer sequences.")
+        print("     Partial compute overlap. Try larger batch or longer sequences.")
     else:
         print(f"  ℹ  Small gain: {tps_gain:.2f}x")
-        print(f"     Sequences too short or batch too small to saturate GPU.")
+        print("     Sequences too short or batch too small to saturate GPU.")
 
     if lat_change > 2.0:
         print(f"  ℹ  Individual latency {lat_change:.2f}x worse — expected trade-off.")
-        print(f"     Each request waits for batch-mates. Total wall time still wins.")
+        print("     Each request waits for batch-mates. Total wall time still wins.")
     print()
 
 
@@ -328,7 +328,7 @@ def run(model_name: str, num_blocks: int = 512) -> None:
     Compares sequential serving against true batched forward pass
     continuous batching across four scenarios.
     """
-    print(f"\nForgeServe Phase 5B — Batched Forward Pass Benchmark")
+    print("\nForgeServe Phase 5B — Batched Forward Pass Benchmark")
     print(f"Model     : {model_name}")
     print(f"KV blocks : {num_blocks}")
 

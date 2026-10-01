@@ -20,12 +20,13 @@ Design principles
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass,field
-from enum import Enum,auto
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import TYPE_CHECKING
-import torch 
 
-if TYPE_CHECKING:  # only check during mypy checks dosent work at runtime 
+import torch
+
+if TYPE_CHECKING:  # only check during mypy checks dosent work at runtime
     from forgeserve.page_attention.paged_cache import PagedKVCache
 
 class RequestStatus(Enum):
@@ -105,16 +106,16 @@ class RequestState:
     prompt: str
     max_new_tokens: int
 
-    # Set by the scheduler during prefill 
-    input_ids: torch.Tensor | None = None 
-    attention_mask: torch.Tensor | None = None 
-    paged_cache: PagedKVCache | None = None 
-    logits: torch.Tensor | None = None 
-    last_token_id: int | None = None 
+    # Set by the scheduler during prefill
+    input_ids: torch.Tensor | None = None
+    attention_mask: torch.Tensor | None = None
+    paged_cache: PagedKVCache | None = None
+    logits: torch.Tensor | None = None
+    last_token_id: int | None = None
 
-    #used to calculate no of blocks 
-    prompt_tokens: int = 0 
-    generated_tokens: int = 0 
+    #used to calculate no of blocks
+    prompt_tokens: int = 0
+    generated_tokens: int = 0
 
     status: RequestStatus= RequestStatus.WAITING
     finish_reason: str =""
@@ -153,7 +154,7 @@ class RequestState:
         Returns 0 before prefill and after the cache is released.
         """
         if self.paged_cache is None:
-            return 0 
+            return 0
         return len(self.paged_cache.block_table)
 
     @property
@@ -165,10 +166,10 @@ class RequestState:
         """
         if self.started_at is None:
             return 0
-        return (self.created_at - self.started_at) * 1_000 
+        return (self.created_at - self.started_at) * 1_000
 
     @property
-    def total_latency_ms(self) -> int:
+    def total_latency_ms(self) -> float | None:
         """
         Elapsed milliseconds from submission to completion.
 
@@ -178,7 +179,7 @@ class RequestState:
             return 0
         return (self.finished_at - self.created_at) * 1_000
 
-    #status 
+    #status
     def mark_running(self) -> None:
         """
         Transition WAITING → RUNNING.
@@ -246,11 +247,11 @@ class RequestState:
             f"blocks={self.blocks_used}"
             f")"
         )
-        
-         
 
 
 
-     
+
+
+
 
 

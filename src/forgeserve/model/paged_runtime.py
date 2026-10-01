@@ -23,7 +23,6 @@ from forgeserve.model.types import AttentionImplementation
 from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
 from forgeserve.page_attention.paged_cache import PagedKVCache
-from transformers.cache_utils import DynamicCache
 
 logger = get_logger(__name__)
 
@@ -272,10 +271,10 @@ class PagedRuntime(Runtime):
             Order matches input requests order.
         """
         self._require_block_manager()
-    
+
         #pre-allocate blocks where needed
         #it must happen before forward pass
-        #if we cannot allocate we cannot store teh result 
+        #if we cannot allocate we cannot store teh result
         for req in requests:
             current_block = req.paged_cache.block_table[-1]
             if current_block.is_full:
@@ -292,19 +291,19 @@ class PagedRuntime(Runtime):
                 req.request_id,
                 )
 
-        #compute L_max 
+        #compute L_max
         #L_max = longest current sequence across all request
-        #all kv caches and mask will be padded to this length 
+        #all kv caches and mask will be padded to this length
         L_max = max(req.paged_cache.seq_len for req in requests)
 
         #Gather KV Caches and build masks
-        #Build these in parallel so we can iterate requests only once 
+        #Build these in parallel so we can iterate requests only once
         batch_k = []
         batch_v = []
         batch_masks = []
 
         device = self.loader.device
-        
+
         for req in requests:
             seq_len = req.paged_cache.seq_len
 
@@ -322,21 +321,21 @@ class PagedRuntime(Runtime):
             ]).unsqueeze(0) # (1,L_max + 1)
             batch_masks.append(mask)
 
-        # stack into batch tensor 
+        # stack into batch tensor
         # batch_k_stacked: (N, num_layers, num_heads, l_max, head_dim)
         batch_k_stacked = torch.stack(batch_k, dim=0)
         batch_v_stacked = torch.stack(batch_v, dim=0)
         attention_mask = torch.cat(batch_masks, dim=0) # (N, L_max_1)
 
         # Collect last token from each request
-        # next_token_id is set during sampling in scheduler 
+        # next_token_id is set during sampling in scheduler
         token_ids = torch.tensor(
             [[req.last_token_id] for req in requests],
             dtype=torch.long,
             device=device,
         )  # (N,1)
 
-        #Build DynamicCache from stacked kv tensors 
+        #Build DynamicCache from stacked kv tensors
         # DynamicCache expects per-layer (N, num_heads, seq_len, head_dim)
         past_kv = DynamicCache()
         num_layers = batch_k_stacked.shape[1]
@@ -346,7 +345,7 @@ class PagedRuntime(Runtime):
             v_layer = batch_v_stacked[:, layer_idx, :, :, :]
             past_kv.update(k_layer,v_layer,layer_idx)
 
-        # one forward pass for all request 
+        # one forward pass for all request
         output = self.forward(
             input_ids=token_ids, #(N,1)
             attention_mask=attention_mask, #(N,L_max)
@@ -369,7 +368,7 @@ class PagedRuntime(Runtime):
             #Extract new token KV from the output
             # output.past_key_values.key_cache[layer]: (N, num_heads, L_max +1, head_dim)
             # New token is always at position -1
-            # we need request i's KV at that position 
+            # we need request i's KV at that position
             for layer_idx in range(num_layers):
                 k_out,v_out = output.past_key_values[layer_idx]
 
@@ -378,7 +377,7 @@ class PagedRuntime(Runtime):
                 k_new = k_out[i, :, -1, :]
                 v_new = v_out[i, :, -1, :]
 
-                #write to request i's current block 
+                #write to request i's current block
                 current_block = req.paged_cache.block_table[-1]
                 current_block.write_token(layer_idx,k_new,v_new)
 
@@ -388,7 +387,7 @@ class PagedRuntime(Runtime):
 
             results.append((logits_i, req.paged_cache))
 
-        return results        
+        return results
 
     def free_request(
             self,

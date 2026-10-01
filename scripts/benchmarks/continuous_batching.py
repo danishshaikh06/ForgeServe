@@ -40,17 +40,17 @@ from __future__ import annotations
 
 import statistics
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 
-from forgeserve.page_attention.block_manager import BlockManager
+from forgeserve.logger import get_logger
 from forgeserve.model.paged_runtime import PagedRuntime
 from forgeserve.model.types import AttentionImplementation
+from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.sampler.greedy import GreedySampler
 from forgeserve.scheduler.continuous_batching import ContinuousBatching
 from forgeserve.scheduler.request import RequestState
-from forgeserve.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -132,8 +132,8 @@ def run_sequential(
     per_request:
         One ``RequestMetrics`` per request in arrival order.
     """
-    from forgeserve.engine.paged_generation import PagedGenerationEngine
     from forgeserve.engine.config import GenerationConfig
+    from forgeserve.engine.paged_generation import PagedGenerationEngine
 
     sampler = GreedySampler()
     engine = PagedGenerationEngine(runtime=runtime, sampler=sampler)
@@ -172,36 +172,34 @@ def run_sequential(
     return _summarise("sequential", "all", wall_ms, per_request), per_request
 
 
-# ── Continuous batching ───────────────────────────────────────────────────────
-
+# Continuous batching
 def run_continuous_batching(
     runtime: PagedRuntime,
     requests: list[tuple[str, str, int]],
     max_batch_size: int | None = None,
 ) -> tuple[BenchmarkSummary, list[RequestMetrics]]:
     """
-        Continuous batching: all requests decode one token per step.
-    
-        All requests are submitted at t=0 (simultaneous arrival).
-        The scheduler runs ``step()`` in a loop until every request
-        has finished.
-    
-        Parameters
-        ----------
-        runtime:
-            Fully initialised ``PagedRuntime`` with block manager attached.
-        requests:
-            List of ``(request_id, prompt, max_new_tokens)`` tuples.
-        max_batch_size:
-            Optional cap on simultaneous running requests.
-    
-        Returns
-        -------
-        summary:
-            Aggregate metrics across all requests.
-        per_request:
-            One ``RequestMetrics`` per request in arrival order.
-     """
+    Continuous batching: all requests decode one token per step.
+    -----------------------------------------------------------
+    All requests are submitted at t=0 (simultaneous arrival).
+    The scheduler runs ``step()`` in a loop until every request
+    has finished.
+    ------------
+    Parameters
+    ----------
+    runtime:
+        Fully initialised ``PagedRuntime`` with block manager attached=.
+    requests:
+        List of ``(request_id, prompt, max_new_tokens)`` tuples.
+    max_batch_size:
+        Optional cap on simultaneous running requests.
+    Returns
+    -------
+    summary:
+        Aggregate metrics across all requests.
+    per_request:
+        One ``RequestMetrics`` per request in arrival order.
+    """
     sampler = GreedySampler()
     scheduler = ContinuousBatching(
         runtime=runtime,
@@ -513,7 +511,7 @@ def build_mixed_requests(n: int = 8) -> list[tuple[str, str, int]]:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 def run(model_name: str, num_blocks: int = 512) -> None:
-    print(f"\nForgeServe Phase 5 Benchmark — Continuous Batching")
+    print("\nForgeServe Phase 5 Benchmark — Continuous Batching")
     print(f"Model     : {model_name}")
     print(f"KV blocks : {num_blocks}")
 

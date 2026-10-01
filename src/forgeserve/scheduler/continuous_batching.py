@@ -54,13 +54,14 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
-import torch 
+import torch
 
+from forgeserve.kv_cache.exception import KVCacheOutOfMemoryError
 from forgeserve.logger import get_logger
 from forgeserve.model.paged_runtime import PagedRuntime
 from forgeserve.sampler.greedy import GreedySampler
-from forgeserve.scheduler.request import RequestState,RequestStatus
-from forgeserve.kv_cache.exception import KVCacheOutOfMemoryError
+from forgeserve.scheduler.request import RequestState
+
 if TYPE_CHECKING:
     pass
 
@@ -105,7 +106,7 @@ class ContinuousBatchScheduler:
             max_batch_size: int | None = None,
     ) -> None:
         self.runtime = runtime
-        self.sampler = sampler 
+        self.sampler = sampler
         self.max_batch_size = max_batch_size
 
         self._waiting: deque[RequestState] = deque()
@@ -134,7 +135,7 @@ class ContinuousBatchScheduler:
         """Number of requests waiting for KV blocks."""
         return len(self._waiting)
 
-    @property 
+    @property
     def num_running(self) -> int:
         """Number of requests currently decoding."""
         return len(self._running)
@@ -144,7 +145,7 @@ class ContinuousBatchScheduler:
         """Convenience accessor for the runtime's block manager."""
         return self.runtime.block_manager
 
-    #add request in the waiting queue 
+    #add request in the waiting queue
     def add_request(
             self,
             request_id: str,
@@ -194,7 +195,7 @@ class ContinuousBatchScheduler:
             raise ValueError(
                 f"max_new_tokens must be > 0, got {max_new_tokens}."
             )
-        
+
         request = RequestState(
             request_id=request_id,
             prompt=prompt,
@@ -213,7 +214,7 @@ class ContinuousBatchScheduler:
 
         return request
 
-    #add request in the running dictionary from waiting queue 
+    #add request in the running dictionary from waiting queue
     def admit_request(self) -> int:
         """
         Promote waiting requests to RUNNING as blocks permit.
@@ -235,14 +236,14 @@ class ContinuousBatchScheduler:
         int
             Number of requests newly admitted this call.
         """
-        admitted = 0 
+        admitted = 0
 
         while self._waiting:
             if(
-                self.max_batch_size is not None 
+                self.max_batch_size is not None
                 and self.num_running >= self.max_batch_size
             ):
-                break 
+                break
 
             candidate = self._waiting[0]
 
@@ -269,7 +270,7 @@ class ContinuousBatchScheduler:
                 self.block_manager.num_free_blocks,
             )
 
-        return admitted   
+        return admitted
 
     def _can_admit(self, request: RequestState) -> bool:
         """
@@ -338,7 +339,7 @@ class ContinuousBatchScheduler:
         )
 
     def _decode_batch(
-        self, 
+        self,
         active_request:list[RequestState],
     ) -> None:
         """
@@ -356,7 +357,7 @@ class ContinuousBatchScheduler:
         # Sample next token for all requests
         # we need the last_token_id set on each request before batched_decode_step
         # Because batched_decode_step reads it to build the token batch tensor
-        # Sample from current logits FIRST, Then run forward for the NEXT step 
+        # Sample from current logits FIRST, Then run forward for the NEXT step
         for req in active_request:
             logits = req.logits #(1,vocab_size)
             next_token = self.sampler.sample(logits) # (1,)
@@ -376,8 +377,8 @@ class ContinuousBatchScheduler:
                 req.max_new_tokens = req.generated_tokens
             return
 
-        # Update each request with its results 
-        for req, (logits,paged_cache) in zip(active_request, results):
+        # Update each request with its results
+        for req, (logits,paged_cache) in zip(active_request, results, strict=True):
             req.logits = logits
             req.paged_cache = paged_cache
             req.generated_tokens+=1
@@ -439,7 +440,7 @@ class ContinuousBatchScheduler:
 
         return len(active)
 
-    #decode-one-token-at-a-time -> Old decode method above _decode_batch() is the new one 
+    #decode-one-token-at-a-time -> Old decode method above _decode_batch() is the new one
     def _decode_one(self,request: RequestState) -> None:
         """
         Advance one request by exactly one decode token.
@@ -476,13 +477,13 @@ class ContinuousBatchScheduler:
                 "Was prefill called?"
             )
 
-        #Sample next token 
+        #Sample next token
         logits = request.logits #(1,vocab_size)
         next_token = self.sampler.sample(logits) #(1,)
-        next_token_id = int(next_token.item()) # to get the token position 
-        next_token = next_token.unsqueeze(-1) #(batch, seq_len) for forward pass 
+        next_token_id = int(next_token.item()) # to get the token position
+        next_token = next_token.unsqueeze(-1) #(batch, seq_len) for forward pass
 
-        #extendt the attention mask 
+        #extendt the attention mask
         #the mask must cover the full sequence at every decode step
         #Passing the original prompt-length mask causes the model to
         #compute wrong position ids for generated tokens.
@@ -497,10 +498,10 @@ class ContinuousBatchScheduler:
             device = request.attention_mask.device,
                  ),
             ],
-            dim=-1 
+            dim=-1
         )
         try:
-            # forward pass with paged kv cache 
+            # forward pass with paged kv cache
             logits, paged_cache = self.runtime.paged_decode_step(
                 token_id=next_token,
                 attention_mask=request.attention_mask,
@@ -516,7 +517,7 @@ class ContinuousBatchScheduler:
                 request.generated_tokens,
             )
 
-        #request state updation 
+        #request state updation
         request.logits = logits
         request.paged_cache = paged_cache
         request.last_token_id = next_token_id
@@ -548,9 +549,9 @@ class ContinuousBatchScheduler:
             Number of requests finished and released this call.
         """
 
-        completed = 0 
+        completed = 0
 
-        for request_id,request in list(self._running.items()):
+        for _request_id,request in list(self._running.items()):
             eos_reached = self._is_eos(request)
             length_reached = request.generated_tokens>=request.max_new_tokens
             oom_reached = request.finish_reason == "oom"
@@ -686,7 +687,7 @@ class ContinuousBatchScheduler:
             f"{self.block_manager.num_blocks})"
         )
 
-        
+
 
 
 

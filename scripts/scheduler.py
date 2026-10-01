@@ -6,13 +6,14 @@ Tests N=1 then N=2 then N=4 concurrent requests.
 """
 
 import torch
-from forgeserve.page_attention.block_manager import BlockManager
+
+from forgeserve.engine.config import GenerationConfig
+from forgeserve.engine.paged_generation import PagedGenerationEngine
 from forgeserve.model.paged_runtime import PagedRuntime
 from forgeserve.model.types import AttentionImplementation
+from forgeserve.page_attention.block_manager import BlockManager
 from forgeserve.sampler.greedy import GreedySampler
 from forgeserve.scheduler.continuous_batching import ContinuousBatchScheduler
-from forgeserve.engine.paged_generation import PagedGenerationEngine
-from forgeserve.engine.config import GenerationConfig
 
 
 def setup(num_blocks: int = 512):

@@ -301,7 +301,7 @@ class PagedKVCache:
             k_padded: Shape (num_layers, num_heads, target_len, head_dim)
             v_padded: Shape (num_layers, num_heads, target_len, head_dim)
         """
-        #first gather what is unpadded 
+        #first gather what is unpadded
         #Shape: (num_layer, num_heads, seq_len, head_dim)
         k_parts = []
         v_parts = []
@@ -314,7 +314,7 @@ class PagedKVCache:
             v_parts.append(block.v_cache[:, :, :filled, :])
 
         if not k_parts:
-            #Empty cache return all zeros 
+            #Empty cache return all zeros
             k_cache = self.block_table[0].k_cache
             shape = (self.num_layers, 1, target_len, k_cache.shape[-1])
             device = self.block_table[0].k_cache.device
@@ -329,14 +329,14 @@ class PagedKVCache:
         pad_len = target_len - current_len
 
         if pad_len > 0:
-            #left pad with zeros 
+            #left pad with zeros
             pad_shape = (k_full.shape[0], k_full.shape[1], pad_len, k_full.shape[3])
             zeros = torch.zeros(pad_shape, device=k_full.device, dtype=k_full.dtype)
             k_full = torch.cat([zeros, k_full], dim=2)
             v_full = torch.cat([zeros, v_full], dim=2)
 
         return k_full, v_full
-        
+
 
 
 

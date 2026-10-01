@@ -1,11 +1,10 @@
-from report import print_comparison, print_scenario_header
+from report import print_comparison
 from runner import run_scenario
 
 from forgeserve.engine.config import GenerationConfig
 from forgeserve.logger import get_logger
 from forgeserve.model.runtime import Runtime
 from forgeserve.sampler.greedy import GreedySampler
-
 
 logger = get_logger(__name__)
 
