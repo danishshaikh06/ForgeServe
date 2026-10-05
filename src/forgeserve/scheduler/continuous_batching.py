@@ -54,13 +54,11 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
-import torch
-
-from forgeserve.kv_cache.exception import KVCacheOutOfMemoryError
 from forgeserve.logger import get_logger
 from forgeserve.model.paged_runtime import PagedRuntime
 from forgeserve.sampler.greedy import GreedySampler
 from forgeserve.scheduler.request import RequestState
+from forgeserve.executor.executor import Executor
 
 if TYPE_CHECKING:
     pass
@@ -102,11 +100,11 @@ class ContinuousBatchScheduler:
     def __init__(
             self,
             runtime: PagedRuntime,
-            sampler: GreedySampler,
+            executor: Executor,
             max_batch_size: int | None = None,
     ) -> None:
         self.runtime = runtime
-        self.sampler = sampler
+        self.executor = executor
         self.max_batch_size = max_batch_size
 
         self._waiting: deque[RequestState] = deque()
@@ -155,14 +153,14 @@ class ContinuousBatchScheduler:
         """
         Submit a new request to the waiting queue.
 
-        No KV blocks are allocated here.  Allocation happens inside
+        No KV blocks are allocated here. Allocation happens inside
         _prefill when the request reaches the front of the queue
         and sufficient blocks are available.
 
         Parameters
         ----------
         request_id:
-            Caller-supplied unique identifier.  Must not already exist
+            Caller-supplied unique identifier. Must not already exist
             in the waiting queue or the running set.
         prompt:
             Raw text to condition generation on.
@@ -253,7 +251,7 @@ class ContinuousBatchScheduler:
                 break
 
             self._waiting.popleft()
-            self._prefill(candidate)
+            self.executor.prefill(candidate)
             candidate.mark_running()
             self._running[candidate.request_id] = candidate
             admitted+=1
@@ -290,106 +288,6 @@ class ContinuousBatchScheduler:
         prompt_tokens = self._count_prompt_tokens(request.prompt)
         blocks_needed = self._blocks_required(prompt_tokens)
         return self.block_manager.can_allocate(blocks_needed)
-
-    #Prefill
-    def _prefill(self,request: RequestState) -> None:
-        """
-        Tokenize the prompt and run the prefill forward pass.
-
-        After this method returns:
-        * ``request.input_ids`` and ``request.attention_mask`` hold
-          the prompt tensors on the correct device.
-        * ``request.paged_cache`` holds the populated ``PagedKVCache``.
-        * ``request.logits`` holds the logits for the first decode step.
-        * ``request.prompt_tokens`` is set.
-
-        The request is not yet marked RUNNING.  That happens in
-        ``admit_requests`` after this method returns successfully.
-
-        Parameters
-        ----------
-        request:
-            The request to prefill.  Must be in WAITING status.
-        """
-        encoded = self.runtime.tokenize(
-            text=request.prompt,
-            system_prompt=None,
-        )
-
-        input_ids: torch.Tensor = encoded["input_ids"].to(self.runtime.loader.device)
-        attention_mask: torch.Tensor = encoded["attention_mask"].to(self.runtime.loader.device)
-
-        logits, paged_cache = self.runtime.paged_prefill(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            request_id=request.request_id,
-        )
-
-        request.input_ids = input_ids
-        request.attention_mask = attention_mask
-        request.paged_cache = paged_cache
-        request.logits = logits
-        request.prompt_tokens = input_ids.shape[1]
-
-        logger.debug(
-            "Prefill complete: id=%s prompt_tokens=%d blocks=%d",
-            request.request_id,
-            request.prompt_tokens,
-            request.blocks_used,
-        )
-
-    def _decode_batch(
-        self,
-        active_request:list[RequestState],
-    ) -> None:
-        """
-        Decode one token for all active requests in a single GPU forward pass.
-
-        This replaces the sequential _decode_one loop.
-        All requests share one forward pass — weights loaded once for all.
-
-        Args:
-            active_requests: All currently RUNNING RequestState objects.
-        """
-        if not active_request:
-            return
-
-        # Sample next token for all requests
-        # we need the last_token_id set on each request before batched_decode_step
-        # Because batched_decode_step reads it to build the token batch tensor
-        # Sample from current logits FIRST, Then run forward for the NEXT step
-        for req in active_request:
-            logits = req.logits #(1,vocab_size)
-            next_token = self.sampler.sample(logits) # (1,)
-            req.last_token_id = int(next_token.item())
-
-        try:
-            results = self.runtime.batched_decode_step(active_request)
-        except KVCacheOutOfMemoryError as e:
-            logger.warning(
-                "OOM during batched decode: %s. "
-                "Finishing affected requests.", e
-            )
-
-            #mark all req as oom-teminated
-            for req in active_request:
-                req.finish_reason = "oom"
-                req.max_new_tokens = req.generated_tokens
-            return
-
-        # Update each request with its results
-        for req, (logits,paged_cache) in zip(active_request, results, strict=True):
-            req.logits = logits
-            req.paged_cache = paged_cache
-            req.generated_tokens+=1
-
-            logger.debug(
-                "Batched token decoded: id=%s token=%d generated=%d blocks=%d",
-                req.request_id,
-                req.last_token_id,
-                req.generated_tokens,
-                req.blocks_used,
-            )
 
     #step
     def step(self) -> int:
@@ -428,10 +326,7 @@ class ContinuousBatchScheduler:
         )
 
         # ONE call handles all requests in one GPU forward pass
-        self._decode_batch(active)
-
-        #for request in active: ->>>>>> used for sequentiaal loop
-            #self._decode_one(request)
+        self.executor.decode_batch(active)
 
         self._finish_completed_requests()
 
@@ -439,97 +334,6 @@ class ContinuousBatchScheduler:
         self.admit_request()
 
         return len(active)
-
-    #decode-one-token-at-a-time -> Old decode method above _decode_batch() is the new one
-    def _decode_one(self,request: RequestState) -> None:
-        """
-        Advance one request by exactly one decode token.
-
-        Steps
-        -----
-        1. Sample the next token from ``request.logits`` using the
-           injected ``Sampler``.
-        2. Extend ``request.attention_mask`` by one column so the model
-           sees the correct full-sequence positional information.
-        3. Call ``paged_decode_step`` to run the forward pass and update
-           the KV cache.
-        4. Store the new logits and ``last_token_id`` on the request.
-
-        The attention mask extension in step 2 is critical.  Without it
-        the model computes incorrect position ids for all generated tokens,
-        producing garbled output with no visible error.
-
-        Parameters
-        ----------
-        request:
-            A RUNNING request with valid ``logits``, ``attention_mask``,
-            and ``paged_cache``.
-
-        Raises
-        ------
-        RuntimeError
-            If ``logits`` or ``paged_cache`` is ``None``.
-        """
-
-        if request.logits is None:
-            raise RuntimeError(
-                f"Request '{request.request_id}' has no paged cache. "
-                "Was prefill called?"
-            )
-
-        #Sample next token
-        logits = request.logits #(1,vocab_size)
-        next_token = self.sampler.sample(logits) #(1,)
-        next_token_id = int(next_token.item()) # to get the token position
-        next_token = next_token.unsqueeze(-1) #(batch, seq_len) for forward pass
-
-        #extendt the attention mask
-        #the mask must cover the full sequence at every decode step
-        #Passing the original prompt-length mask causes the model to
-        #compute wrong position ids for generated tokens.
-        ## 1 = valid token, 0 = masked/padding token; model attends only to valid positions.
-        # Causal masking additionally prevents each token from attending to future tokens.
-        request.attention_mask = torch.cat(
-            [
-            request.attention_mask,
-            torch.ones(
-            (1,1),
-            dtype= request.attention_mask.dtype,
-            device = request.attention_mask.device,
-                 ),
-            ],
-            dim=-1
-        )
-        try:
-            # forward pass with paged kv cache
-            logits, paged_cache = self.runtime.paged_decode_step(
-                token_id=next_token,
-                attention_mask=request.attention_mask,
-                paged_cache = request.paged_cache
-            )
-        except KVCacheOutOfMemoryError:
-            logger.warning(
-                "OOM during decode for request '%s' at position %d. "
-                "Finishing with %d tokens. "
-                "Increase num_blocks or reduce concurrency.",
-                request.request_id,
-                request.paged_cache.seq_len,
-                request.generated_tokens,
-            )
-
-        #request state updation
-        request.logits = logits
-        request.paged_cache = paged_cache
-        request.last_token_id = next_token_id
-        request.generated_tokens+=1
-
-        logger.debug(
-            "Token decoded: id=%s token=%d generated=%d blocks=%d",
-            request.request_id,
-            next_token_id,
-            request.generated_tokens,
-            request.blocks_used,
-        )
 
     #comletion
     def _finish_completed_requests(self) -> int:
@@ -567,7 +371,7 @@ class ContinuousBatchScheduler:
 
         return completed
 
-    def _finish_request(self, request:RequestState):
+    def _finish_request(self, request:RequestState) -> None:
         """
         Release all KV blocks owned by a completed request and
         remove it from the running set.

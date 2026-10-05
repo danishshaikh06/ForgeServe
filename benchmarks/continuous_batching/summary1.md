@@ -1,3 +1,20 @@
+Title: 	Per-Request Continuous Decoding
+
+Description: Each active request performs its own model forward pass for every decoding step. Requests may be decoded continuously, but each request invokes the model independently.
+
+Decode step 1:
+  req_1 → forward()
+  req_2 → forward()
+  req_3 → forward()
+
+Decode step 2:
+  req_1 → forward()
+  req_2 → forward()
+  req_3 → forward()
+
+Per-Request Forward-Pass Baseline
+Sequential Autoregressive Inference
+
 Phase 5 Summary — Continuous Batching
 ======================================
 Throughput gain observed:    1.04x tokens/second
