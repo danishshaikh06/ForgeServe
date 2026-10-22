@@ -64,6 +64,7 @@ LLM Inference Pipeline (Decoder-Only Transformer)
       - Repeat until EOS or max_new_tokens is reached.
 """
 
+
 import time
 from typing import Any, cast
 
@@ -81,83 +82,103 @@ logger = get_logger(__name__)
 
 
 class Runtime:
-    """
-    Runtime class that initializes the model and tokenizer using ModelLoader.
-    """
+    """Loads a causal language model and provides cached inference operations."""
 
     def __init__(
         self,
         model_name: str,
         attention: AttentionImplementation = AttentionImplementation.SDPA,
     ) -> None:
-
         self.model_name = model_name
+
         try:
             logger.info(
                 "Initializing Runtime: model=%s attention=%s",
-                model_name, attention.value,
+                model_name,
+                attention.value,
             )
-            self.loader = ModelLoader(model_name=self.model_name, attention=attention)
 
-        except Exception as e:
-            logger.exception(f"Failed to initialize Runtime for {self.model_name}: {e}")
-            raise ModelException(f"Failed to initialize Runtime for {self.model_name}: {e}") from e
-
-        else:
-            logger.info(f"ModelLoader initialized successfully for {self.model_name}.")
+            self.loader = ModelLoader(
+                model_name=self.model_name,
+                attention=attention,
+            )
             self.model, self.tokenizer = self.loader.load()
 
-    def tokenize(self, text: str, system_prompt: str | None = None) -> BatchEncoding:
-        """
-        Tokenizes the input text using the loaded tokenizer.
-        Args:
-            text (str): The input text to tokenize.
-        Returns:
-            tokenized_output: The tokenized representation of the input text.
-        """
+            self.model.eval()
+
+        except Exception as exc:
+            logger.exception(
+                "Failed to initialize Runtime for %s",
+                self.model_name,
+            )
+            raise ModelException(
+                f"Failed to initialize Runtime for {self.model_name}: {exc}"
+            ) from exc
+
+        logger.info(
+            "Runtime initialized successfully for %s",
+            self.model_name,
+        )
+
+    def tokenize(
+        self,
+        text: str,
+        system_prompt: str | None = None,
+    ) -> BatchEncoding:
+        """Format and tokenize a chat prompt."""
+
         messages = []
+
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            messages.append(
+                {"role": "system", "content": system_prompt}
+            )
+
         messages.append({"role": "user", "content": text})
 
         logger.debug("Tokenizing input text")
-        formatted_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        tokenized_output = cast(
-            BatchEncoding,
-            self.tokenizer(
-                formatted_text,
-                return_tensors="pt",
-            ).to(self.loader.device),
-        )
-        logger.debug("Tokenization completed successfully")
 
-        return tokenized_output
+        formatted_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+        tokenized_output = self.tokenizer(
+            formatted_text,
+            return_tensors="pt",
+        ).to(self.loader.device)
+
+        logger.debug("Tokenization completed successfully")
+        return cast(BatchEncoding, tokenized_output)
 
     def forward(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None, **kwargs: Any
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        **kwargs: Any,
     ) -> CausalLMOutputWithPast:
-        """
-        Performs a forward pass through the model.
-        Args:
-            input_ids (torch.Tensor): The tokenized input IDs.
-            attention_mask (torch.Tensor): The attention mask for the input.
-            **kwargs: Keyword arguments for the model's forward method.
-        Returns:
-            output: The model's output.
-        """
+        """Perform a model forward pass without tracking gradients."""
+
         with torch.inference_mode():
             start = time.perf_counter()
 
-            logger.debug("Performing forward pass through the model...")
-
             output = cast(
-                CausalLMOutputWithPast, self.model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
+                CausalLMOutputWithPast,
+                self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    **kwargs,
+                ),
             )
-            end = time.perf_counter()
 
-            time_taken_for = end - start
+            elapsed = time.perf_counter() - start
 
-        logger.debug(f"Forward pass completed. Time taken for forward pass{time_taken_for}")
+        logger.debug(
+            "Forward pass completed in %.4f seconds",
+            elapsed,
+        )
+
         return output
 
     def prefill(
@@ -166,103 +187,149 @@ class Runtime:
         attention_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, KVCache]:
         """
-        Prefill phase: process the full prompt once.
-
-        Passes use_cache=True so the model returns past_key_values.
-        Returns the logits for the last token and the populated KV cache.
-
-        Args:
-            input_ids: Full prompt token ids. Shape: (batch, prompt_len)
-            attention_mask: Attention mask. Shape: (batch, prompt_len)
+        Process the entire prompt once.
 
         Returns:
-            logits: Shape (batch,seq_len,vocab_size) — logits for next token
-            cache: KVCache populated with K/V for all prompt tokens
+            logits: (batch, vocab_size), for the next token.
+            cache: KV cache populated with the prompt.
         """
-        logger.debug("Prefill: processing %d prompt token", input_ids.shape[1])
+
+        if input_ids.ndim != 2:
+            raise ValueError(
+                "input_ids must have shape (batch, sequence_length)"
+            )
+
+        if attention_mask.shape != input_ids.shape:
+            raise ValueError(
+                "attention_mask and input_ids must have identical shapes"
+            )
+
+        logger.debug(
+            "Prefill: processing %d prompt tokens",
+            input_ids.shape[1],
+        )
 
         output = self.forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            use_cache = True,
+            use_cache=True,
         )
 
-        assert output.logits is not None
-        assert output.past_key_values is not None
+        if output.logits is None:
+            raise ModelException("Model did not return logits during prefill")
 
-        logits = output.logits[:, -1, :] # last token logits
+        if output.past_key_values is None:
+            raise ModelException(
+                "Model did not return past_key_values during prefill"
+            )
+
+        logits = output.logits[:, -1, :]
 
         cache = KVCache.from_prefill(
             past_key_values=output.past_key_values,
-            prompt_len= input_ids.shape[1]
+            prompt_len=input_ids.shape[1],
         )
 
         logger.debug(
-            "Prefill complete. Cache has %d layers, seq_len=%d",
+            "Prefill complete: layers=%d seq_len=%d",
             cache.num_layers,
             cache.seq_len,
         )
 
         return logits, cache
 
-    def decode(self, token_ids: torch.Tensor) -> str:
-        """
-        Decodes the token IDs back to text using the loaded tokenizer.
-        Args:
-            token_ids (torch.Tensor): The token IDs to decode.
-        Returns:
-            decoded_text (str): The decoded text.
-        """
+    def decode(
+        self,
+        token_ids: torch.Tensor | list[int],
+    ) -> str:
+        """Convert token IDs into text."""
+
         start = time.perf_counter()
-        decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
-        end = time.perf_counter()
 
-        time_taken_dec = end - start
+        decoded_text = self.tokenizer.decode(
+            token_ids,
+            skip_special_tokens=True,
+        )
 
-        logger.debug(f"Decoded text successfully.Time taken to decode{time_taken_dec}")
+        elapsed = time.perf_counter() - start
+
+        logger.debug(
+            "Decoded text in %.4f seconds",
+            elapsed,
+        )
+
         return decoded_text
 
     def decode_step(
         self,
         token_id: torch.Tensor,
         attention_mask: torch.Tensor,
-        cache: KVCache
-        ) -> tuple[torch.Tensor, KVCache]:
+        cache: KVCache,
+    ) -> tuple[torch.Tensor, KVCache]:
         """
-        Decode phase: process one new token using the KV cache.
-        Key insight: input_ids contains ONLY the new token (shape: batch, 1).
-        The model attends to previous tokens via past_key_values, not input_ids.
-        The attention_mask must cover the FULL sequence (prompt + all decoded tokens).
-        Args:
-            token_id: The last generated token. Shape: (batch, 1)
-            attention_mask: Full sequence mask. Shape: (batch, cache.seq_len + 1)
-            cache: Current KV cache
-        Returns:
-            logits: Shape (batch, vocab_size)
-            updated_cache: KVCache with new token's K/V appended
+        Process exactly one new token using the existing KV cache.
+
+        token_id:       (batch, 1)
+        attention_mask: (batch, cache.seq_len + 1)
         """
+
+        expected_mask_shape = (
+            token_id.shape[0],
+            cache.seq_len + 1,
+        )
+
+        if token_id.ndim != 2 or token_id.shape[1] != 1:
+            raise ValueError(
+                "token_id must have shape (batch, 1)"
+            )
+
+        if attention_mask.shape != expected_mask_shape:
+            raise ValueError(
+                f"Expected attention_mask shape {expected_mask_shape}, "
+                f"got {tuple(attention_mask.shape)}"
+            )
+
+        if token_id.device != attention_mask.device:
+            raise ValueError(
+                "token_id and attention_mask must be on the same device"
+            )
+
         logger.debug(
             "Decode step at position %d",
             cache.seq_len,
         )
 
         output = self.forward(
-            input_ids = token_id, # only one new token
-            attention_mask = attention_mask, # full sequence mask
-            past_key_values = cache.past_key_values,
-            use_cache = True,
+            input_ids=token_id,
+            attention_mask=attention_mask,
+            past_key_values=cache.past_key_values,
+            use_cache=True,
         )
 
-        assert output.logits is not None
-        assert output.past_key_values is not None
+        if output.logits is None:
+            raise ModelException(
+                "Model did not return logits during decode"
+            )
+
+        if output.past_key_values is None:
+            raise ModelException(
+                "Model did not return past_key_values during decode"
+            )
 
         logits = output.logits[:, -1, :]
         updated_cache = cache.update(output.past_key_values)
 
         return logits, updated_cache
 
-    def log_gpu_memory(stage: str):
+    @staticmethod
+    def log_gpu_memory(stage: str) -> None:
+        """Log CUDA allocated, reserved, and peak allocated memory."""
+
         if not torch.cuda.is_available():
+            logger.debug(
+                "[%s] CUDA unavailable; skipping GPU memory logging",
+                stage,
+            )
             return
 
         allocated = torch.cuda.memory_allocated() / (1024 ** 2)
@@ -270,13 +337,10 @@ class Runtime:
         peak = torch.cuda.max_memory_allocated() / (1024 ** 2)
 
         logger.info(
-            "[%s] Allocated: %.2f MiB | "
-            "Reserved: %.2f MiB | Peak allocated: %.2f MiB",
+            "[%s] Allocated: %.2f MiB | Reserved: %.2f MiB | "
+            "Peak allocated: %.2f MiB",
             stage,
             allocated,
             reserved,
             peak,
         )
-
-
-

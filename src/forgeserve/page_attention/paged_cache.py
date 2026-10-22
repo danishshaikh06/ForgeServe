@@ -270,9 +270,9 @@ class PagedKVCache:
             for block in self.block_table:
                 filled = block.num_filled
                 if filled == 0:
-
                     continue
-                #shape: [num_layers, num_heads, block_size, head_dim]
+
+                #shape: [num_heads, block_size, head_dim]
                 k_parts.append(block.k_cache[layer_idx, :, :filled, :])
                 v_parts.append(block.v_cache[layer_idx, :, :filled, :])
 

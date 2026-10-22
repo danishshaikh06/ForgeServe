@@ -6,6 +6,8 @@ from transformers.cache_utils import Cache
 
 from forgeserve.kv_cache.exception import KVCacheNotInitializedError
 
+import torch 
+
 # HuggingFace past_key_values type alias
 # tuple of (K, V) per layer -> it refers to transformer layers
 # each K or V: (batch_size, num_heads, seq_len, head_dim)
@@ -79,5 +81,4 @@ class KVCache:
                     f'Layer {layer_idx}: cache seq_len {k.shape[2]}'
                     f'!= tracked seq_len {self.seq_len}'
                 )
-
-
+            
