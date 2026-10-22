@@ -52,7 +52,14 @@ class KVCacheGenerationEngine:
 
             #prefill
             #process the full prompt once, get cache + first logits to pass to decode step
+
+            # Before prefill
+            torch.cuda.reset_peak_memory_stats()
+            self.runtime.log_gpu_memory("Before prefill")
+
             logits, cache = self.runtime.prefill(input_ids, attention_mask)
+
+            self.runtime.log_gpu_memory("After prefill")
 
             generated = 0
             is_eos = False
@@ -82,6 +89,9 @@ class KVCacheGenerationEngine:
                     attention_mask = attention_mask,
                     cache = cache,
                 )
+
+                if generated % 10 == 0:
+                    self.runtime.log_gpu_memory(f"After {generated} generated tokens")
 
             text = self.runtime.decode(input_ids[0])
             end = time.perf_counter()

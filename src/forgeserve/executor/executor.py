@@ -116,6 +116,9 @@ class Executor:
             req.paged_cache = paged_cache
             req.generated_tokens+=1
 
+            if req.generated_tokens == 1:
+                req.mark_first_token()
+
             logger.debug(
                 "Batched token decoded: id=%s token=%d generated=%d blocks=%d",
                 req.request_id,

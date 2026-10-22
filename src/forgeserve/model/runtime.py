@@ -261,5 +261,22 @@ class Runtime:
 
         return logits, updated_cache
 
+    def log_gpu_memory(stage: str):
+        if not torch.cuda.is_available():
+            return
+
+        allocated = torch.cuda.memory_allocated() / (1024 ** 2)
+        reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+        peak = torch.cuda.max_memory_allocated() / (1024 ** 2)
+
+        logger.info(
+            "[%s] Allocated: %.2f MiB | "
+            "Reserved: %.2f MiB | Peak allocated: %.2f MiB",
+            stage,
+            allocated,
+            reserved,
+            peak,
+        )
+
 
 

@@ -123,6 +123,7 @@ class RequestState:
     created_at: float = field(default_factory=time.perf_counter)
     started_at: float | None = None
     finished_at: float | None = None
+    first_token: float | None = None 
 
     @property
     def total_tokens(self) -> int:
@@ -157,6 +158,13 @@ class RequestState:
             return 0
         return len(self.paged_cache.block_table)
 
+    def mark_first_token(self) -> None:
+        """
+        Record when the first generated token becomes available.
+        """
+        if self.first_token_at is None:
+            self.first_token_at = time.perf_counter()
+
     @property
     def time_to_first_token_ms(self) -> float | None:
         """
@@ -164,9 +172,12 @@ class RequestState:
 
         Returns ``None`` if the request has not yet been admitted.
         """
-        if self.started_at is None:
-            return 0
-        return (self.created_at - self.started_at) * 1_000
+        if self.first_token_at is None:
+            return None 
+
+        return(
+            self.first_token_at - self.created_at
+        ) * 1000 
 
     @property
     def total_latency_ms(self) -> float | None:
