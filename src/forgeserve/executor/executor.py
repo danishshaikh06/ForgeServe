@@ -6,7 +6,7 @@ from forgeserve.logger import get_logger
 from forgeserve.scheduler.request import RequestState
 from forgeserve.model.paged_runtime import PagedRuntime
 from forgeserve.sampler.greedy import GreedySampler
-from forgeserve.kv_cache.exception import KVCacheOutOfMemoryError
+from forgeserve.page_attention.exception import KVCacheOutOfMemoryError
 
 
 logger = get_logger(__name__)
@@ -71,62 +71,126 @@ class Executor:
             request.blocks_used,
         )
 
+    
     def decode_batch(
         self,
-        active_request:list[RequestState],
+        active_request: list[RequestState],
     ) -> None:
         """
-        Decode one token for all active requests in a single GPU forward pass.
+        Generate one token for every active request.
 
-        This replaces the sequential _decode_one loop.
-        All requests share one forward pass — weights loaded once for all.
+        Optimization:
+        Skip the next model forward pass for requests that
+        have reached EOS or max_new_tokens.
 
-        Args:
-            active_requests: All currently RUNNING RequestState objects.
+        Scheduler remains responsible for finishing requests
+        and releasing KV blocks.
         """
+
         if not active_request:
             return
 
-        # Sample next token for all requests
-        # we need the last_token_id set on each request before batched_decode_step
-        # Because batched_decode_step reads it to build the token batch tensor
-        # Sample from current logits FIRST, Then run forward for the NEXT step
+        eos_id = self.runtime.tokenizer.eos_token_id
+
+        # Only these requests need the next forward pass.
+        continuing_requests: list[RequestState] = []
+
+        # Sample the next token.
         for req in active_request:
-            logits = req.logits #(1,vocab_size)
-            next_token = self.sampler.sample(logits) # (1,)
+
+            if req.logits is None:
+                raise RuntimeError(
+                    f"Request '{req.request_id}' has no logits."
+                )
+
+            next_token = self.sampler.sample(req.logits)
+
             req.last_token_id = int(next_token.item())
+            req.generated_tokens += 1
 
-        try:
-            results = self.runtime.batched_decode_step(active_request)
-        except KVCacheOutOfMemoryError as e:
-            logger.warning(
-                "OOM during batched decode: %s. "
-                "Finishing affected requests.", e
-            )
-
-            #mark all req as oom-teminated
-            for req in active_request:
-                req.finish_reason = "oom"
-                req.max_new_tokens = req.generated_tokens
-            return
-
-        # Update each request with its results
-        for req, (logits,paged_cache) in zip(active_request, results, strict=True):
-            req.logits = logits
-            req.paged_cache = paged_cache
-            req.generated_tokens+=1
-
+            # First token is available immediately after sampling.
             if req.generated_tokens == 1:
                 req.mark_first_token()
 
+            # Check whether another forward is needed.
+            eos_reached = (
+                eos_id is not None
+                and req.last_token_id == eos_id
+            )
+
+            length_reached = (
+                req.generated_tokens >= req.max_new_tokens
+            )
+
+            if not (eos_reached or length_reached):
+                continuing_requests.append(req)
+
             logger.debug(
-                "Batched token decoded: id=%s token=%d generated=%d blocks=%d",
+                "Token sampled: id=%s token=%d generated=%d/%d "
+                "eos=%s length_reached=%s",
                 req.request_id,
                 req.last_token_id,
                 req.generated_tokens,
-                req.blocks_used,
+                req.max_new_tokens,
+                eos_reached,
+                length_reached,
             )
 
+        skipped = len(active_request) - len(continuing_requests)
+
+        logger.debug(
+            "Decode filtering: active=%d continuing=%d skipped=%d",
+            len(active_request),
+            len(continuing_requests),
+            skipped,
+        )
+
+        #  Nothing left to forward.
+        if not continuing_requests:
+            logger.debug(
+                "Skipping GPU forward: all requests reached "
+                "EOS or generation limit."
+            )
+            return
+
+        # Forward only continuing requests.
+        try:
+            results = self.runtime.batched_decode_step(
+                continuing_requests
+            )
+
+        except KVCacheOutOfMemoryError as exc:
+            logger.warning(
+                "KV-cache OOM during batched decode: %s. "
+                "Terminating %d continuing requests.",
+                exc,
+                len(continuing_requests),
+            )
+
+            for req in continuing_requests:
+                req.finish_reason = "oom"
+
+            # Scheduler will finalize these requests and free KV.
+            return
+
+        # Update logits and caches.
+        # Token counts were already updated during sampling.
+        for req, (logits, paged_cache) in zip(
+            continuing_requests,
+            results,
+            strict=True,
+        ):
+            req.logits = logits
+            req.paged_cache = paged_cache
+
+            logger.debug(
+                "Next-token logits ready: id=%s generated=%d "
+                "blocks=%d",
+                req.request_id,
+                req.generated_tokens,
+                req.blocks_used,
+            )
+            
     def free_request(self, request_id: str) -> None:
         """
         Release all KV blocks owned by a request.
