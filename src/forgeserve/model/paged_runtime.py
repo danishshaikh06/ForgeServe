@@ -322,7 +322,7 @@ class PagedRuntime(Runtime):
             batch_masks.append(mask)
 
         # stack into batch tensor
-        # batch_k_stacked: (N, num_layers, num_heads, l_max, head_dim)
+        # batch_k_stacked: (N, num_layers, num_heads, l_max, head_dim) -> where N is the number of request 
         batch_k_stacked = torch.stack(batch_k, dim=0)
         batch_v_stacked = torch.stack(batch_v, dim=0)
         attention_mask = torch.cat(batch_masks, dim=0) # (N, L_max_1)
