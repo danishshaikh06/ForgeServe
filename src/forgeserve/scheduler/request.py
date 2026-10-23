@@ -123,7 +123,7 @@ class RequestState:
     created_at: float = field(default_factory=time.perf_counter)
     started_at: float | None = None
     finished_at: float | None = None
-    first_token: float | None = None 
+    first_token_at: float | None = None 
 
     @property
     def total_tokens(self) -> int:
